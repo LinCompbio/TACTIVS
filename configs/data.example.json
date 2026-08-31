@@ -1,0 +1,28 @@
+{
+  "datasets": [
+    {
+      "name": "dekois2",
+      "cache": "/path/to/dekois2/cache/conformer",
+      "whitener": "/path/to/dekois2_covariance_only_whitener.npz",
+      "positive_manifest": "/path/to/dekois2/active_manifest.csv",
+      "expected_targets": 81,
+      "expected_positives": 3235
+    },
+    {
+      "name": "randomdecoy",
+      "cache": "/path/to/randomdecoy/cache/conformer",
+      "whitener": "/path/to/randomdecoy_covariance_only_whitener.npz",
+      "positive_manifest": "/path/to/randomdecoy/active_manifest.csv",
+      "expected_targets": 68,
+      "expected_positives": 2614
+    },
+    {
+      "name": "truedecoy",
+      "cache": "/path/to/truedecoy/cache/conformer",
+      "whitener": "/path/to/shared_covariance_only_whitener.npz",
+      "positive_manifest": "/path/to/truedecoy/active_manifest.csv",
+      "expected_targets": 147,
+      "expected_positives": 5631
+    }
+  ]
+}

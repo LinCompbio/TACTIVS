@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tactivs"
+version = "0.1.0"
+description = "Reference-only transductive molecular library ranking"
+readme = "README.md"
+license = "LicenseRef-TACTIVS-Commercial-Notice-1.0"
+license-files = ["LICENSE", "COMMERCIAL_USE.md"]
+keywords = ["virtual-screening", "molecular-embeddings", "transductive-inference"]
+requires-python = ">=3.9"
+dependencies = [
+  "numpy>=1.24",
+  "optuna>=4.0",
+  "pandas>=2.0",
+  "rdkit>=2022.3",
+  "torch>=2.1",
+]
+
+[project.scripts]
+tactivs-infer = "tactivs.cli:infer_main"
+tactivs-build-reference-pool = "tactivs.cli:build_reference_pool_main"
+
+[project.optional-dependencies]
+test = ["pytest>=8.0"]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

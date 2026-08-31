@@ -1,0 +1,15 @@
+cff-version: 1.2.0
+message: "If you use TACTIVS, please cite this software and the associated paper."
+title: "TACTIVS: Test-time actives induction for flexible target-specific virtual screening"
+type: software
+authors:
+  - family-names: Chen
+    given-names: Lin
+  - family-names: Luttens
+    given-names: Andreas
+  - family-names: Ballester
+    given-names: Pedro J.
+  - family-names: Houston
+    given-names: Douglas R.
+version: 0.1.0
+license: LicenseRef-TACTIVS-Commercial-Notice-1.0

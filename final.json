@@ -1,0 +1,11 @@
+{
+  "graph_propagation_steps": 9,
+  "graph_search_precision": "fp16",
+  "graph_indegree_exponent": 0.09668681093234655,
+  "graph_neighbors": 69,
+  "graph_restart_probability": 0.15899843191942972,
+  "graph_temperature": 0.22650207299094172,
+  "graph_weight": 2.233284812475988,
+  "max_reference_conformers": 7,
+  "support_similarity_topk": 9
+}
