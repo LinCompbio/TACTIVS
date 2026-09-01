@@ -7,8 +7,6 @@ name = "tactivs"
 version = "0.1.0"
 description = "Reference-only transductive molecular library ranking"
 readme = "README.md"
-license = "LicenseRef-TACTIVS-Commercial-Notice-1.0"
-license-files = ["LICENSE", "COMMERCIAL_USE.md"]
 keywords = ["virtual-screening", "molecular-embeddings", "transductive-inference"]
 requires-python = ">=3.9"
 dependencies = [

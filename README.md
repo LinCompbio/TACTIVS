@@ -23,9 +23,7 @@ projected and normalized. TACTIVS scores every non-reference molecule using:
    degree-corrected k-nearest-neighbor graph.
 3. **Fusion:** a standardized direct score plus a fixed weighted graph score.
 
-The inference path does not read candidate activity labels. See
-[PROTOCOL.md](PROTOCOL.md) for the experimental definition and [DATA.md](DATA.md)
-for the cache schema and encoder boundary.
+The inference path does not read candidate activity labels.
 
 ## Installation
 
@@ -46,9 +44,7 @@ pytest -q
 ```
 
 The publication environment used PyTorch 2.7.1+cu128, NumPy 1.26.4, pandas
-2.3.3, Optuna 4.9.0, and RDKit 2022.03.5. `uv.lock` records a fully resolved
-development and testing environment; the publication versions above remain
-the authoritative environment for reproducing reported numerical results.
+2.3.3, Optuna 4.9.0, and RDKit 2022.03.5.
 
 ## Inference
 
@@ -135,7 +131,7 @@ python scripts/evaluate_module_ablations.py \
 
 These commands require separately obtained benchmark structures, EPT
 embeddings, the frozen EPT checkpoint, and whitening artifacts. They are not
-redistributed here; see [DATA.md](DATA.md).
+redistributed here.
 
 ## Repository Layout
 
@@ -149,12 +145,3 @@ tests/          synthetic unit and integration tests
 `final.json` contains the frozen global parameter vector and graph-search
 execution precision.
 `density_free_search_space.json` contains the formal search space.
-
-## License and Citation
-
-Research and other noncommercial use is permitted under the
-[TACTIVS Research and Commercial Notice License 1.0](LICENSE). Commercial use
-is permitted only after sending the prior written notice described in
-[COMMERCIAL_USE.md](COMMERCIAL_USE.md). This is a source-available license, not
-an OSI-approved open-source license. Citation metadata is in
-[CITATION.cff](CITATION.cff).
