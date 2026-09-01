@@ -43,6 +43,18 @@ python -m pip install -e '.[test]'
 pytest -q
 ```
 
+Alternatively, create the tested base environment with Conda:
+
+```bash
+conda env create -f environment.yml
+conda activate tactivs
+```
+
+Install a CUDA build of PyTorch appropriate for the host before a full GPU
+benchmark run if the resolver selected a CPU build. EPT reference encoding also
+requires the dependencies of the upstream EPT source tree, including a
+PyTorch/CUDA-compatible `torch-scatter` build.
+
 The publication environment used PyTorch 2.7.1+cu128, NumPy 1.26.4, pandas
 2.3.3, Optuna 4.9.0, and RDKit 2022.03.5.
 
@@ -85,6 +97,63 @@ tactivs-infer \
 
 The output columns are `parent_molecule_id`, `score`, `similarity`, `direct`,
 and `graph`.
+
+### User scenario: screen a bundled library with private actives
+
+A prospective user can select a target library from the public benchmark
+bundle and rank it using one or more experimentally confirmed active ligands
+that are not already members of that candidate library. Candidate embeddings
+and the whitener come from the bundle; only the private reference ligands need
+to be encoded.
+
+Download the original EPT `epoch49_step215752.ckpt` from the
+[public EPT checkpoint folder](https://drive.google.com/drive/folders/1tBqGwC_jcTdq3QArFZox_auSCzxDjA0P).
+This is the checkpoint family expected by the legacy epoch-49 adapter in this
+repository. The adapter extracts the ligand-only EPT `graph_repr`, matching the
+512-dimensional raw representation used to construct the bundled candidate
+caches. The checkpoint is not redistributed by TACTIVS.
+
+Prepare `known_actives.csv`:
+
+```csv
+parent_molecule_id,canonical_smiles
+private_active_1,CC(=O)Oc1ccccc1C(=O)O
+private_active_2,CN1CCC[C@H]1c1cccnc1
+```
+
+Generate ten deterministic ETKDGv3 conformers per reference and encode them:
+
+```bash
+tactivs-build-reference-pool \
+  --molecules known_actives.csv \
+  --output known_actives.npz \
+  --ept-root /path/to/upstream-ept \
+  --ept-ranking-root /path/to/upstream-ept \
+  --encoder-checkpoint /path/to/epoch49_step215752.ckpt \
+  --conformers 10 \
+  --seed 0
+```
+
+Then rank a target from one bundled dataset without reading its candidate
+labels:
+
+```bash
+tactivs-infer \
+  --cache /path/to/tactivs_benchmarks_zenodo_v1/datasets/litpcba \
+  --whitener /path/to/tactivs_benchmarks_zenodo_v1/datasets/litpcba/whitener.npz \
+  --target ADRB2 \
+  --reference-pool known_actives.npz \
+  --theta final.json \
+  --output adrb2_ranking.csv
+```
+
+The EPT source checkout is required because the original checkpoint serializes
+upstream Python model classes. A same-named checkpoint alone is not sufficient
+without compatible upstream `models/` and `data/` modules. If a private active
+is already present in the bundled library, use the labelled benchmark sampling
+mode for a retrospective test or remove that molecule from a prospective
+candidate cache; external reference IDs intentionally cannot collide with
+candidate IDs.
 
 `final.json` enables native CUDA FP16 for the dense graph-neighbor search. Only
 the similarity matrix multiplication and top-k selection use FP16; selected
