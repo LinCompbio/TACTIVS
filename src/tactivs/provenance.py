@@ -48,8 +48,12 @@ def artifact_set_sha256(paths: list[Path]) -> str:
 
 def cache_sha256(cache: Path) -> str:
     cache = Path(cache)
-    paths = [cache / "target_manifest.npz", cache / "target_parent_ids.npz"]
-    paths.extend(sorted(cache.glob("embeddings_*.npy")))
+    if (cache / "index.npz").exists():
+        paths = [cache / "index.npz"]
+        paths.extend(sorted((cache / "embeddings").glob("embeddings_*.npy")))
+    else:
+        paths = [cache / "target_manifest.npz", cache / "target_parent_ids.npz"]
+        paths.extend(sorted(cache.glob("embeddings_*.npy")))
     missing = [path for path in paths if not path.exists()]
     if missing:
         raise FileNotFoundError(f"cache fingerprint inputs missing: {missing}")

@@ -96,8 +96,50 @@ search setting falls back to FP32. Set
 
 ## Reproduction
 
-Create a local configuration from [configs/data.example.json](configs/data.example.json)
-and replace every placeholder path.
+Download and extract the TACTIVS benchmark bundle from Zenodo. The extracted
+directory has one versioned manifest and the same dataset layout for LIT-PCBA,
+RandomDecoy, and TrueDecoy:
+
+```text
+tactivs-benchmarks/
+  bundle.json
+  datasets/
+    litpcba/
+    randomdecoy/
+    truedecoy/
+      index.npz
+      active_manifest.csv
+      whitener.npz
+      embeddings/embeddings_*.npy
+```
+
+Run all three benchmarks without writing the much larger molecule-level score
+artifact:
+
+```bash
+python scripts/evaluate_benchmarks.py \
+  --bundle /path/to/tactivs-benchmarks \
+  --theta final.json \
+  --output-dir runs/publication \
+  --skip-molecule-scores
+```
+
+The command writes `episodes.csv`, `metrics_per_dataset_k.csv`,
+`metrics_per_dataset_protocol_k.csv`, `summary.csv`, and
+`run_provenance.json`. LIT-PCBA uses molecule-random reference sampling;
+RandomDecoy and TrueDecoy additionally use the series-disjoint protocol. Add
+`--datasets litpcba` or `--ks 1 --seeds 0` for a smaller run. Omit
+`--skip-molecule-scores` when candidate-level rankings are required.
+
+The bundle can be staged from the original caches with
+`scripts/build_benchmark_bundle.py` and the source template in
+`configs/bundle_sources.example.json`. Hard links are used by default so local
+staging does not duplicate the embedding shards. Zenodo users do not need this
+construction step.
+
+The legacy path-based configuration remains supported. Create a local
+configuration from [configs/data.example.json](configs/data.example.json) and
+replace every placeholder path.
 
 Parameter selection on DEKOIS2:
 

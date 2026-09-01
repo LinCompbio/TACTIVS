@@ -4,7 +4,7 @@ import torch
 import torch.nn.functional as F
 
 from tactivs.cache import TargetData
-from tactivs.core import build_graph, score_library
+from tactivs.core import build_graph, prepare_graph, score_library
 from tactivs.evaluation import score_episodes
 
 PARAMS = {
@@ -48,6 +48,13 @@ def test_chunked_similarity_matches_single_chunk():
     np.testing.assert_allclose(chunked.similarity, single.similarity, atol=1e-7)
     np.testing.assert_allclose(chunked.direct, single.direct, atol=1e-7)
     np.testing.assert_allclose(chunked.scores, single.scores, atol=1e-7)
+
+
+def test_precomputed_graph_matches_inline_graph():
+    target = synthetic_target()
+    inline = score_library(target, ["ref"], PARAMS)
+    reused = score_library(target, ["ref"], PARAMS, graph=prepare_graph(target, PARAMS))
+    np.testing.assert_allclose(reused.scores, inline.scores, atol=1e-7)
 
 
 def test_empty_references_are_rejected():

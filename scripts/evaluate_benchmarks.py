@@ -12,9 +12,10 @@ import numpy as np
 import pandas as pd
 import torch
 
+from tactivs.bundle import load_bundle_specs
 from tactivs.cache import EmbeddingCache, load_projection
 from tactivs.episodes import build_episode_plan, read_positive_manifest, series_groups
-from tactivs.evaluation import score_episodes
+from tactivs.evaluation import retain_complete_protocol_targets, score_episodes
 from tactivs.metrics import paired_bootstrap
 from tactivs.provenance import (
     PROTOCOL_VERSION,
@@ -40,7 +41,9 @@ METRICS = (
 )
 
 
-def evaluate_dataset(spec, params_by_name, seeds, ks, protocols, device, score_writers):
+def evaluate_dataset(
+    spec, params_by_name, seeds, ks, protocols, device, score_writers=None
+):
     cache = EmbeddingCache(Path(spec["cache"]))
     projection = load_projection(Path(spec["whitener"]), device)
     manifest = read_positive_manifest(Path(spec["positive_manifest"]))
@@ -80,9 +83,15 @@ def evaluate_dataset(spec, params_by_name, seeds, ks, protocols, device, score_w
     }
     planned_targets = set().union(*(set(plan[protocol]) for protocol in protocols))
     target_ids = sorted(planned_targets & set(cache.target_ids))
-    if "expected_targets" in spec and len(target_ids) != spec["expected_targets"]:
+    fixed_random_targets = set(plan.get("fixed_random", {}))
+    if (
+        "expected_targets" in spec
+        and "fixed_random" in protocols
+        and len(fixed_random_targets) != spec["expected_targets"]
+    ):
         raise ValueError(
-            f"{spec['name']}: only {len(target_ids)} targets satisfy the episode protocol; "
+            f"{spec['name']}: only {len(fixed_random_targets)} targets satisfy the "
+            "fixed-random protocol; "
             f"expected {spec['expected_targets']}"
         )
     rows = []
@@ -95,6 +104,11 @@ def evaluate_dataset(spec, params_by_name, seeds, ks, protocols, device, score_w
             retain_raw="series" in protocols,
         )
         for config, params in params_by_name.items():
+            callback = None
+            if score_writers is not None:
+                callback = lambda *values, dataset=spec["name"], name=config: (
+                    score_writers[name].write_episode(dataset, name, *values)
+                )
             for result in score_episodes(
                 target,
                 plan,
@@ -103,13 +117,16 @@ def evaluate_dataset(spec, params_by_name, seeds, ks, protocols, device, score_w
                 params,
                 protocols=protocols,
                 series_of_parent=series[target_id],
-                score_callback=lambda *values, dataset=spec["name"], name=config: (
-                    score_writers[name].write_episode(dataset, name, *values)
-                ),
+                score_callback=callback,
             ):
                 rows.append({"dataset": spec["name"], "config": config, **result})
+        del target
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
         if index % 20 == 0 or index == len(target_ids):
             print(f"[{spec['name']} {index}/{len(target_ids)}]", flush=True)
+    if "series" in protocols:
+        rows = retain_complete_protocol_targets(rows, "series", seeds, ks)
     return rows
 
 
@@ -141,9 +158,9 @@ def _write_metric_tables(episodes: pd.DataFrame, output_dir: Path) -> None:
         ["dataset", "config", "protocol", "K", "target_id"], as_index=False
     )[list(METRICS)].mean()
     protocol_metric_summary = (
-        target_protocol_k_metrics.groupby(
-            ["dataset", "config", "protocol", "K"]
-        )[list(METRICS)]
+        target_protocol_k_metrics.groupby(["dataset", "config", "protocol", "K"])[
+            list(METRICS)
+        ]
         .agg(["mean", "std", "count"])
         .reset_index()
     )
@@ -263,9 +280,7 @@ def write_ablation_outputs(
             ("direct", "graph_only"),
             ("graph", "direct_only"),
         ):
-            gain, low, high = paired_bootstrap(
-                (full - frame[reduced_name]).to_numpy()
-            )
+            gain, low, high = paired_bootstrap((full - frame[reduced_name]).to_numpy())
             ablations.append(
                 {
                     "dataset": dataset,
@@ -285,10 +300,21 @@ def write_ablation_outputs(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--data-config", type=Path, required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--data-config", type=Path)
+    source.add_argument(
+        "--bundle",
+        type=Path,
+        help="Zenodo bundle root containing bundle.json and standardized datasets.",
+    )
     parser.add_argument("--theta", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--ablations", action="store_true")
+    parser.add_argument(
+        "--skip-molecule-scores",
+        action="store_true",
+        help="Write aggregate episode results without the large per-molecule artifact.",
+    )
     parser.add_argument(
         "--device", default="cuda" if torch.cuda.is_available() else "cpu"
     )
@@ -306,10 +332,16 @@ def main() -> None:
         help="optional dataset names from the data config",
     )
     args = parser.parse_args()
+    if args.ablations and args.skip_molecule_scores:
+        parser.error("--ablations cannot be combined with --skip-molecule-scores")
+    if args.bundle is not None:
+        datasets = load_bundle_specs(args.bundle)
+        args.data_config = args.bundle / "bundle.json"
+    else:
+        datasets = json.loads(args.data_config.read_text())["datasets"]
     configure_determinism()
     args.output_dir.mkdir(parents=True, exist_ok=True)
     device = torch.device(args.device)
-    data_config = json.loads(args.data_config.read_text())
     selected = json.loads(args.theta.read_text())
     if args.ablations:
         params = {
@@ -324,7 +356,6 @@ def main() -> None:
     if not seeds or not ks or min(ks) < 1:
         parser.error("--seeds and positive --ks values are required")
     rows = []
-    datasets = data_config["datasets"]
     if args.datasets:
         requested = set(args.datasets)
         available = {dataset["name"] for dataset in datasets}
@@ -342,29 +373,51 @@ def main() -> None:
     for path in set(molecule_scores_paths.values()):
         path.parent.mkdir(parents=True, exist_ok=True)
 
-    with ExitStack() as stack:
-        writers_by_path = {
-            path: stack.enter_context(MoleculeScoreWriter(path))
-            for path in set(molecule_scores_paths.values())
-        }
-        score_writers = {
-            name: writers_by_path[path] for name, path in molecule_scores_paths.items()
-        }
+    molecule_score_rows = {}
+    if args.skip_molecule_scores:
         for dataset in datasets:
-            rows.extend(
-                evaluate_dataset(
-                    dataset,
-                    params,
-                    seeds,
-                    ks,
-                    args.protocols,
-                    device,
-                    score_writers,
+            protocols = [
+                protocol
+                for protocol in args.protocols
+                if protocol in dataset.get("protocols", args.protocols)
+            ]
+            if protocols:
+                rows.extend(
+                    evaluate_dataset(
+                        dataset, params, seeds, ks, protocols, device, None
+                    )
                 )
-            )
-        molecule_score_rows = {
-            name: writer.row_count for name, writer in score_writers.items()
-        }
+    else:
+        with ExitStack() as stack:
+            writers_by_path = {
+                path: stack.enter_context(MoleculeScoreWriter(path))
+                for path in set(molecule_scores_paths.values())
+            }
+            score_writers = {
+                name: writers_by_path[path]
+                for name, path in molecule_scores_paths.items()
+            }
+            for dataset in datasets:
+                protocols = [
+                    protocol
+                    for protocol in args.protocols
+                    if protocol in dataset.get("protocols", args.protocols)
+                ]
+                if protocols:
+                    rows.extend(
+                        evaluate_dataset(
+                            dataset,
+                            params,
+                            seeds,
+                            ks,
+                            protocols,
+                            device,
+                            score_writers,
+                        )
+                    )
+            molecule_score_rows = {
+                name: writer.row_count for name, writer in score_writers.items()
+            }
     episodes = pd.DataFrame(rows)
 
     if args.ablations:
@@ -388,11 +441,7 @@ def main() -> None:
         .mean()
         .reset_index()
     )
-    per_k = (
-        target_k.groupby(["dataset", "config", "K"])["ef_1%"]
-        .mean()
-        .reset_index()
-    )
+    per_k = target_k.groupby(["dataset", "config", "K"])["ef_1%"].mean().reset_index()
     per_k.to_csv(args.output_dir / "per_dataset_k.csv", index=False)
 
     # Match the published benchmark convention: average repeated episodes within
@@ -471,17 +520,26 @@ def main() -> None:
         "datasets": [dataset["name"] for dataset in datasets],
         "aggregation": "average seeds and protocols within target and K; then mean and sample SD across targets",
         "bedroc_alpha": [20.0, 80.5],
-        "molecule_scores": str(shared_path.resolve()),
-        "molecule_scores_sha256": sha256(shared_path),
-        "molecule_score_rows": next(iter(molecule_score_rows.values())),
+        "molecule_scores": (
+            None if args.skip_molecule_scores else str(shared_path.resolve())
+        ),
+        "molecule_scores_sha256": (
+            None if args.skip_molecule_scores else sha256(shared_path)
+        ),
+        "molecule_score_rows": (
+            0 if args.skip_molecule_scores else next(iter(molecule_score_rows.values()))
+        ),
         "source_sha256": source_sha256(ROOT),
         "software": software_versions(),
         "device": str(device),
         "artifacts": {
             dataset["name"]: {
-                "cache_sha256": cache_sha256(Path(dataset["cache"])),
-                "whitener_sha256": sha256(Path(dataset["whitener"])),
-                "positive_manifest_sha256": sha256(Path(dataset["positive_manifest"])),
+                "cache_sha256": dataset.get("cache_sha256")
+                or cache_sha256(Path(dataset["cache"])),
+                "whitener_sha256": dataset.get("whitener_sha256")
+                or sha256(Path(dataset["whitener"])),
+                "positive_manifest_sha256": dataset.get("positive_manifest_sha256")
+                or sha256(Path(dataset["positive_manifest"])),
             }
             for dataset in datasets
         },

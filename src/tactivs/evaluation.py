@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter, defaultdict
 
 import numpy as np
 import torch
@@ -13,6 +14,7 @@ from .core import (
     build_graph,
     molecule_centers,
     pool_by_parent,
+    prepare_graph,
     propagate_graph,
     score_library,
     zscore,
@@ -20,6 +22,29 @@ from .core import (
 from .episodes import episode_parent_masks
 from .metrics import screening_metrics
 from .reference_pool import ReferencePool
+
+
+def retain_complete_protocol_targets(rows, protocol, seeds, ks):
+    """Keep protocol rows only for targets with every requested seed/K episode."""
+    expected = len(set(seeds)) * len(set(ks))
+    counts = Counter(
+        (row["config"], row["target_id"]) for row in rows if row["protocol"] == protocol
+    )
+    configurations = {config for config, _ in counts}
+    by_target = defaultdict(set)
+    for (config, target_id), count in counts.items():
+        if count == expected:
+            by_target[target_id].add(config)
+    complete = {
+        target_id
+        for target_id, observed in by_target.items()
+        if observed == configurations
+    }
+    return [
+        row
+        for row in rows
+        if row["protocol"] != protocol or row["target_id"] in complete
+    ]
 
 
 @torch.no_grad()
@@ -44,9 +69,7 @@ def score_external_reference(
     pose_similarity = torch.topk(
         embeddings @ reference.T, k=support_k, dim=1
     ).values.mean(1)
-    pose_score = float(params.get("similarity_weight", 1.0)) * zscore(
-        pose_similarity
-    )
+    pose_score = float(params.get("similarity_weight", 1.0)) * zscore(pose_similarity)
     all_parents = np.ones(n_parents, dtype=bool)
     molecule_score = zscore(
         pool_by_parent(pose_score, pose_codes, all_parents, n_parents)
@@ -88,9 +111,7 @@ def score_external_reference(
     result = ScoreResult(
         parent_ids=target.parent_ids.copy(),
         scores=final.cpu().numpy(),
-        similarity=pool_by_parent(
-            pose_similarity, pose_codes, all_parents, n_parents
-        )
+        similarity=pool_by_parent(pose_similarity, pose_codes, all_parents, n_parents)
         .cpu()
         .numpy(),
         direct=molecule_score.cpu().numpy(),
@@ -117,6 +138,11 @@ def score_episodes(
     for protocol in protocols:
         if target.target_id not in plan[protocol]:
             continue
+        # The observable library is unchanged between fixed-random episodes, so
+        # its graph is invariant to the sampled support set and can be reused.
+        shared_graph = (
+            prepare_graph(target, params) if protocol == "fixed_random" else None
+        )
         for seed in seeds:
             support_order = plan[protocol][target.target_id][str(seed)]["support_order"]
             for known in ks:
@@ -144,7 +170,9 @@ def score_episodes(
                 episode_target, support_ids = pool.materialize(
                     episode_target, episode_target.projection
                 )
-                result = score_library(episode_target, support_ids, params)
+                result = score_library(
+                    episode_target, support_ids, params, graph=shared_graph
+                )
                 expected_ids = target.parent_ids[ranked_mask]
                 if not np.array_equal(
                     result.parent_ids.astype(str), expected_ids.astype(str)

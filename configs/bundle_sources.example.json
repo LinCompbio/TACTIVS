@@ -1,0 +1,28 @@
+{
+  "datasets": [
+    {
+      "name": "litpcba",
+      "layout": "shared_bank",
+      "source": "/path/to/litpcba/shared_bank",
+      "whitener": "/path/to/litpcba_whitener.npz",
+      "active_manifest": "/path/to/litpcba/active_manifest.csv",
+      "protocols": ["fixed_random"]
+    },
+    {
+      "name": "randomdecoy",
+      "layout": "legacy_cache",
+      "source": "/path/to/randomdecoy/cache",
+      "whitener": "/path/to/randomdecoy_whitener.npz",
+      "active_manifest": "/path/to/randomdecoy/active_manifest.csv",
+      "protocols": ["fixed_random", "series"]
+    },
+    {
+      "name": "truedecoy",
+      "layout": "legacy_cache",
+      "source": "/path/to/truedecoy/cache",
+      "whitener": "/path/to/truedecoy_whitener.npz",
+      "active_manifest": "/path/to/truedecoy/active_manifest.csv",
+      "protocols": ["fixed_random", "series"]
+    }
+  ]
+}

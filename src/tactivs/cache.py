@@ -62,7 +62,10 @@ def external_whiten(
 
 class EmbeddingStore:
     def __init__(self, cache: Path):
-        paths = sorted(cache.glob("embeddings_*.npy"))
+        embedding_root = (
+            cache / "embeddings" if (cache / "embeddings").is_dir() else cache
+        )
+        paths = sorted(embedding_root.glob("embeddings_*.npy"))
         if not paths:
             raise FileNotFoundError(f"no embeddings_*.npy shards in {cache}")
         self.arrays = [np.load(path, mmap_mode="r") for path in paths]
@@ -72,6 +75,29 @@ class EmbeddingStore:
         self.dim = dimensions.pop()
         self.starts = np.cumsum([0] + [array.shape[0] for array in self.arrays[:-1]])
         self.ends = np.cumsum([array.shape[0] for array in self.arrays])
+
+    def load_indexed(
+        self, starts: np.ndarray, counts: np.ndarray, device: torch.device
+    ) -> torch.Tensor:
+        """Load arbitrary contiguous molecule segments while preserving their order."""
+        starts = np.asarray(starts, dtype=np.int64)
+        counts = np.asarray(counts, dtype=np.int64)
+        total = int(counts.sum())
+        output = torch.empty((total, self.dim), dtype=torch.float32, device=device)
+        destinations = np.arange(total, dtype=np.int64)
+        molecule_offsets = np.repeat(np.cumsum(counts) - counts, counts)
+        global_rows = np.repeat(starts, counts) + destinations - molecule_offsets
+        shard_codes = np.searchsorted(self.ends, global_rows, side="right")
+        if len(shard_codes) and int(shard_codes.max()) >= len(self.arrays):
+            raise IndexError("indexed embedding row exceeds the available shards")
+        for shard in np.unique(shard_codes):
+            mask = shard_codes == shard
+            rows = global_rows[mask] - int(self.starts[shard])
+            block = np.asarray(self.arrays[int(shard)][rows], dtype=np.float32)
+            output[torch.from_numpy(destinations[mask]).to(device)] = torch.from_numpy(
+                block
+            ).to(device)
+        return output
 
     def load(self, start: int, end: int, device: torch.device) -> torch.Tensor:
         output = torch.empty(
@@ -99,6 +125,10 @@ class EmbeddingCache:
     def __init__(self, cache: Path):
         self.cache = Path(cache)
         self.store = EmbeddingStore(self.cache)
+        bundle_index = self.cache / "index.npz"
+        if bundle_index.exists():
+            self._load_bundle_index(bundle_index)
+            return
         self.manifest_path = self.cache / "target_manifest.npz"
         parent_path = self.cache / "target_parent_ids.npz"
         if not self.manifest_path.exists() or not parent_path.exists():
@@ -140,6 +170,52 @@ class EmbeddingCache:
             for i, target_id in enumerate(target_ids)
         }
         self._parent_labels: np.ndarray | None = None
+        self._indexed = False
+
+    def _load_bundle_index(self, path: Path) -> None:
+        with np.load(path, allow_pickle=False) as data:
+            required = {
+                "target_ids",
+                "parent_offsets",
+                "parent_ids",
+                "parent_starts",
+                "parent_counts",
+                "parent_labels",
+            }
+            missing = required - set(data.files)
+            if missing:
+                raise ValueError(f"bundle index missing arrays: {sorted(missing)}")
+            target_ids = list(map(str, data["target_ids"]))
+            offsets = np.asarray(data["parent_offsets"], dtype=np.int64)
+            parent_ids = np.asarray(data["parent_ids"]).astype(str)
+            starts = np.asarray(data["parent_starts"], dtype=np.int64)
+            counts = np.asarray(data["parent_counts"], dtype=np.int64)
+            labels = np.asarray(data["parent_labels"], dtype=np.int8)
+        if len(offsets) != len(target_ids) + 1 or offsets[0] != 0:
+            raise ValueError("bundle parent offsets do not match target IDs")
+        if offsets[-1] != len(parent_ids):
+            raise ValueError("bundle parent offsets do not cover every parent")
+        if not (len(parent_ids) == len(starts) == len(counts) == len(labels)):
+            raise ValueError("bundle parent arrays have inconsistent lengths")
+        if np.any(counts < 1) or np.any(starts < 0):
+            raise ValueError("bundle embedding starts and counts must be positive")
+        if len(set(target_ids)) != len(target_ids):
+            raise ValueError("bundle target IDs must be unique")
+        self.manifest_path = path
+        self.meta = {}
+        self.parent_ids = {}
+        for index, target_id in enumerate(target_ids):
+            begin, end = int(offsets[index]), int(offsets[index + 1])
+            self.meta[target_id] = {
+                "index": index,
+                "parent_begin": begin,
+                "parent_end": end,
+                "parent_starts": starts[begin:end].copy(),
+                "parent_counts": counts[begin:end].copy(),
+            }
+            self.parent_ids[target_id] = parent_ids[begin:end].copy()
+        self._parent_labels = labels
+        self._indexed = True
 
     @property
     def target_ids(self) -> list[str]:
@@ -162,7 +238,13 @@ class EmbeddingCache:
         retain_raw: bool = False,
     ) -> TargetData:
         meta = self.meta[target_id]
-        raw = self.store.load(meta["row_start"], meta["row_end"], device)
+        raw = (
+            self.store.load_indexed(
+                meta["parent_starts"], meta["parent_counts"], device
+            )
+            if self._indexed
+            else self.store.load(meta["row_start"], meta["row_end"], device)
+        )
         counts = meta["parent_counts"].copy()
         embeddings = (
             external_whiten(raw, projection, counts)
@@ -172,11 +254,16 @@ class EmbeddingCache:
         labels = None
         if include_labels:
             labels = self.get_parent_labels(target_id)
+        local_starts = (
+            np.concatenate(([0], np.cumsum(counts[:-1]))).astype(np.int64)
+            if self._indexed
+            else meta["parent_starts"].copy()
+        )
         return TargetData(
             target_id=target_id,
             embeddings=embeddings,
             parent_ids=self.parent_ids[target_id].copy(),
-            parent_starts=meta["parent_starts"].copy(),
+            parent_starts=local_starts,
             parent_counts=counts,
             parent_labels=labels,
             raw_embeddings=raw if retain_raw else None,
@@ -186,6 +273,10 @@ class EmbeddingCache:
     def get_raw(self, target_id: str, device: torch.device) -> torch.Tensor:
         """Load unnormalized conformer embeddings for an individual target."""
         meta = self.meta[target_id]
+        if self._indexed:
+            return self.store.load_indexed(
+                meta["parent_starts"], meta["parent_counts"], device
+            )
         return self.store.load(meta["row_start"], meta["row_end"], device)
 
 

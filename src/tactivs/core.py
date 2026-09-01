@@ -10,6 +10,8 @@ import torch.nn.functional as F
 
 from .cache import TargetData
 
+Graph = tuple[torch.Tensor, torch.Tensor]
+
 
 @dataclass
 class ScoreResult:
@@ -84,6 +86,18 @@ def build_graph(
 
 
 @torch.no_grad()
+def prepare_graph(target: TargetData, params: dict) -> Graph:
+    """Build the target graph once so repeated support episodes can reuse it."""
+    return build_graph(
+        molecule_centers(target),
+        int(params["graph_neighbors"]),
+        float(params["graph_temperature"]),
+        float(params["graph_indegree_exponent"]),
+        str(params.get("graph_search_precision", "fp32")),
+    )
+
+
+@torch.no_grad()
 def propagate_graph(seeds, neighbors, weights, restart: float, steps: int):
     state = seeds
     for _ in range(steps):
@@ -112,9 +126,7 @@ def topk_mean_similarity(
     """Compute mean top-k similarities without materializing the full matrix."""
     if query_chunk < 1:
         raise ValueError("query_chunk must be positive")
-    output = torch.empty(
-        len(queries), dtype=queries.dtype, device=queries.device
-    )
+    output = torch.empty(len(queries), dtype=queries.dtype, device=queries.device)
     for begin in range(0, len(queries), query_chunk):
         end = min(begin + query_chunk, len(queries))
         similarity = queries[begin:end] @ references.T
@@ -128,6 +140,7 @@ def score_library(
     reference_ids: list[str],
     params: dict,
     query_chunk: int = 32768,
+    graph: Graph | None = None,
 ) -> ScoreResult:
     """Rank an unlabeled target library from K known positive references."""
     if not reference_ids:
@@ -151,14 +164,7 @@ def score_library(
     if not query_mask.any():
         raise ValueError("query library is empty after removing references")
 
-    centers = molecule_centers(target)
-    graph_indices, graph_weights = build_graph(
-        centers,
-        int(params["graph_neighbors"]),
-        float(params["graph_temperature"]),
-        float(params["graph_indegree_exponent"]),
-        str(params.get("graph_search_precision", "fp32")),
-    )
+    graph_indices, graph_weights = graph or prepare_graph(target, params)
     seed = torch.zeros((n_parents, 1), dtype=target.embeddings.dtype, device=device)
     seed[support_codes, 0] = 1.0 / len(support_codes)
     graph_state = propagate_graph(
@@ -189,9 +195,7 @@ def score_library(
         support_k,
         query_chunk,
     )
-    pose_score = float(params.get("similarity_weight", 1.0)) * zscore(
-        pose_similarity
-    )
+    pose_score = float(params.get("similarity_weight", 1.0)) * zscore(pose_similarity)
     molecule_score = zscore(
         pool_by_parent(pose_score, library_codes, query_mask, n_parents)
     )

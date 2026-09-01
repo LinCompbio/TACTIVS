@@ -63,3 +63,37 @@ def test_subset_target_recomputes_episode_local_centering(tmp_path):
     )
     torch.testing.assert_close(subset.embeddings, expected)
     assert subset.parent_ids.tolist() == ["p1", "p2"]
+
+
+def test_bundle_index_loads_noncontiguous_shared_embeddings(tmp_path):
+    embedding_root = tmp_path / "embeddings"
+    embedding_root.mkdir()
+    np.save(
+        embedding_root / "embeddings_000000.npy",
+        np.asarray([[1, 0], [2, 0], [3, 0]], dtype=np.float32),
+    )
+    np.save(
+        embedding_root / "embeddings_000001.npy",
+        np.asarray([[4, 0], [5, 0], [6, 0]], dtype=np.float32),
+    )
+    np.savez_compressed(
+        tmp_path / "index.npz",
+        target_ids=np.asarray(["t"]),
+        parent_offsets=np.asarray([0, 2]),
+        parent_ids=np.asarray(["p2", "p1"]),
+        parent_starts=np.asarray([4, 0]),
+        parent_counts=np.asarray([2, 2]),
+        parent_labels=np.asarray([0, 1]),
+    )
+
+    target = EmbeddingCache(tmp_path).get(
+        "t", torch.device("cpu"), include_labels=True, retain_raw=True
+    )
+
+    np.testing.assert_allclose(
+        target.raw_embeddings.numpy(),
+        np.asarray([[5, 0], [6, 0], [1, 0], [2, 0]], dtype=np.float32),
+    )
+    assert target.parent_starts.tolist() == [0, 2]
+    assert target.parent_ids.tolist() == ["p2", "p1"]
+    assert target.parent_labels.tolist() == [0, 1]
