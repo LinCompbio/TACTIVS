@@ -1,160 +1,124 @@
 # TACTIVS
 
-TACTIVS (Test-time ACTIves induction for flexible target-specific Virtual
-Screening) is a reference-only, transductive molecular-library readout. It
-combines direct similarity to known actives with graph propagation over an unlabeled
-candidate-library graph while keeping the molecular encoder frozen.
-
-## Method
-
-For one target, TACTIVS receives:
-
-- `K` known active reference molecules;
-- an otherwise unlabeled molecular library;
-- precomputed multi-conformer EPT embeddings; and
-- a frozen covariance-only whitening projection.
-
-The library is centered using a molecule-balanced, target-local mean and then
-projected and normalized. TACTIVS scores every non-reference molecule using:
-
-1. **Direct similarity:** top-k conformer similarity to the reference
-   conformers, max-pooled to the molecule level.
-2. **Graph propagation:** propagate reference scores with restart over a
-   degree-corrected k-nearest-neighbor graph.
-3. **Fusion:** a standardized direct score plus a fixed weighted graph score.
-
-The inference path does not read candidate activity labels. See
-[PROTOCOL.md](PROTOCOL.md) for the experimental definition and [DATA.md](DATA.md)
-for the cache schema and encoder boundary.
+TACTIVS ranks a molecular library from a small pool of known active molecules.
+It uses frozen multi-conformer EPT embeddings, target-local centering,
+covariance whitening, direct reference similarity, and graph propagation.
 
 ## Installation
 
-Python 3.9 or later is required. A CUDA-capable PyTorch installation is
-recommended for full benchmark evaluation.
-
 ```bash
-git clone <repository-url>
-cd tactivs
-python -m pip install -e .
+conda env create -f environment.yml
+conda activate tactivs
 ```
 
-For development and tests:
+The minimal EPT inference code is included in `src/tactivs/_vendor/ept`.
+We thank Rui Jiao, Xiangzhe Kong, Li Zhang, Ziyang Yu, Fangyuan Ren, Wenjuan
+Tan, Wenbing Huang, and Yang Liu for developing EPT. Download the published
+epoch-49 checkpoint separately and pass it with `--encoder-checkpoint`.
 
-```bash
-python -m pip install -e '.[test]'
-pytest -q
+## Input Format
+
+Candidate libraries and external reference pools use the same CSV format:
+
+```csv
+parent_molecule_id,canonical_smiles
+molecule_1,CCO
+molecule_2,CCN
 ```
 
-The publication environment used PyTorch 2.7.1+cu128, NumPy 1.26.4, pandas
-2.3.3, Optuna 4.9.0, and RDKit 2022.03.5. `uv.lock` records a fully resolved
-development and testing environment; the publication versions above remain
-the authoritative environment for reproducing reported numerical results.
+SDF and MOL files are also accepted. For SDF input, the molecule title is used
+as `parent_molecule_id`.
 
-## Inference
+## User Inference
 
-For a labelled benchmark or internal collection, reproducibly sample `K`
-cached actives as references:
+First encode the candidate library:
 
 ```bash
-tactivs-infer \
-  --cache /path/to/cache/conformer \
-  --whitener /path/to/covariance_only_whitener.npz \
-  --target TARGET_ID \
-  --sample-labeled 3 \
-  --seed 0 \
-  --theta final.json \
-  --output ranking.csv
+tactivs-build-cache \
+  --molecules candidates.csv \
+  --output cache/my_target \
+  --target MY_TARGET \
+  --encoder-checkpoint /path/to/EPT.ckpt \
+  --conformers 10
 ```
 
-Labels are used only to select the references and are removed before scoring.
-For prospective inference, build an external reference pool from a CSV with
-`parent_molecule_id,canonical_smiles` columns or from an SDF:
+For a library with more molecules than the EPT embedding dimension, fit a
+library-specific covariance whitener from the cache:
+
+```bash
+tactivs-fit-whitener \
+  --cache cache/my_target \
+  --output cache/my_target_whitener.npz
+```
+
+EPT embeddings have 512 dimensions, so this command requires at least 513
+molecules. The library mean is used to estimate the covariance but is not saved;
+inference recomputes the target-local mean after combining candidates and
+references. For smaller libraries, use the released PDBscreen whitener.
+
+Encode the known actives as the reference pool:
 
 ```bash
 tactivs-build-reference-pool \
   --molecules known_actives.csv \
-  --output known_actives.npz \
-  --ept-root /path/to/ept \
-  --ept-ranking-root /path/to/ept/molfunnel_ranking_epoch49 \
-  --encoder-checkpoint /path/to/ept.ckpt
+  --output cache/my_target_references.npz \
+  --encoder-checkpoint /path/to/EPT.ckpt \
+  --conformers 10
+```
 
+Run inference:
+
+```bash
 tactivs-infer \
-  --cache /path/to/cache/conformer \
-  --whitener /path/to/covariance_only_whitener.npz \
-  --target TARGET_ID \
-  --reference-pool known_actives.npz \
+  --cache cache/my_target \
+  --whitener cache/my_target_whitener.npz \
+  --target MY_TARGET \
+  --reference-pool cache/my_target_references.npz \
   --theta final.json \
   --output ranking.csv
 ```
 
-The output columns are `parent_molecule_id`, `score`, `similarity`, `direct`,
-and `graph`.
+The released PDBscreen whitener can be used instead of a library-specific
+whitener. Candidate and reference embeddings are combined before target-local
+centering and whitening. Reference molecules are excluded from the output.
+`ranking.csv` contains `parent_molecule_id`, `score`, `similarity`, `direct`,
+and `graph`; no benchmark metrics are calculated in this path.
 
-`final.json` enables native CUDA FP16 for the dense graph-neighbor search. Only
-the similarity matrix multiplication and top-k selection use FP16; selected
-edge similarities, graph weights, propagation, direct scoring, and fusion use
-FP32. Direct-similarity queries use a larger FP32 chunk to reduce CUDA launch
-overhead without changing their numerical result. On non-CUDA devices the graph
-search setting falls back to FP32. Set
-`graph_search_precision` to `fp32` for a strict full-precision baseline.
+## Benchmark Reproduction
 
-## Reproduction
-
-Create a local configuration from [configs/data.example.json](configs/data.example.json)
-and replace every placeholder path.
-
-Parameter selection on DEKOIS2:
+The released benchmark cache contains both active and inactive molecules with
+labels. For every episode, its selected active molecules form the reference
+pool, and all remaining molecules in the episode are ranked by the same
+inference path used above. Labels are read again only after ranking to calculate
+metrics.
 
 ```bash
-python search_density_free.py \
-  --data-config configs/data.local.json \
-  --output-dir runs/density_free_dekois_reference_only_100
-```
-
-The search defaults to FP32 to preserve the original selection run. Add
-`--graph-search-precision fp16` for an accelerated, numerically near-equivalent
-search recorded under a distinct run specification.
-
-Frozen benchmark evaluation:
-
-```bash
-python scripts/evaluate_benchmarks.py \
-  --data-config configs/data.local.json \
+tactivs-benchmark \
+  --data-root /path/to/tactivs_data \
+  --benchmark truedecoy \
+  --split series-disjoint \
+  --seed 0 \
   --theta final.json \
-  --output-dir runs/final_evaluation
+  --output-dir runs/truedecoy-series-seed0
 ```
 
-Module ablations:
+TrueDecoy and RandomDecoy support `molecule-random` and `series-disjoint`.
+LIT-PCBA supports `molecule-random` and `ave`. The command writes
+`episodes.csv`, `summary_by_k.csv`, and `summary_overall.csv`.
 
-```bash
-python scripts/evaluate_module_ablations.py \
-  --data-config configs/data.local.json \
-  --theta final.json \
-  --output-dir runs/module_ablations
-```
-
-These commands require separately obtained benchmark structures, EPT
-embeddings, the frozen EPT checkpoint, and whitening artifacts. They are not
-redistributed here; see [DATA.md](DATA.md).
-
-## Repository Layout
+The benchmark data layout is:
 
 ```text
-configs/        portable data-configuration template
-scripts/        cache preparation and evaluation entry points
-src/tactivs/    inference, episodes, metrics, and artifact writers
-tests/          synthetic unit and integration tests
+tactivs_data/
+  truedecoy/
+    ept/index.npz
+    ept/embeddings/
+    whitener.npz
+    splits/
+  randomdecoy/
+  litpcba/
 ```
 
-`final.json` contains the frozen global parameter vector and graph-search
-execution precision.
-`density_free_search_space.json` contains the formal search space.
+## License
 
-## License and Citation
-
-Research and other noncommercial use is permitted under the
-[TACTIVS Research and Commercial Notice License 1.0](LICENSE). Commercial use
-is permitted only after sending the prior written notice described in
-[COMMERCIAL_USE.md](COMMERCIAL_USE.md). This is a source-available license, not
-an OSI-approved open-source license. Citation metadata is in
-[CITATION.cff](CITATION.cff).
+See [LICENSE](LICENSE).

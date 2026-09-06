@@ -1,36 +1,11 @@
 __pycache__/
 *.py[cod]
-*.egg-info/
 .pytest_cache/
 .ruff_cache/
-.coverage
-htmlcov/
 .venv/
-venv/
 build/
 dist/
-explore/results/
-
-# Local data, configurations, and generated artifacts
-data/
+*.egg-info/
+weights/
+*.ckpt
 runs/
-configs/data.local.json
-*.db
-*.csv.gz
-*.npz
-*.npy
-
-# Editors and operating systems
-.idea/
-.vscode/
-.DS_Store
-
-# LaTeX build products
-*.aux
-*.bbl
-*.blg
-*.fdb_latexmk
-*.fls
-*.log
-*.out
-*.synctex.gz

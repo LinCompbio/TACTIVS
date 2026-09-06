@@ -22,23 +22,45 @@ def screening_metrics(labels: np.ndarray, scores: np.ndarray) -> dict[str, float
     roc = Scoring.CalcROC(feed, 0)
     fpr = np.asarray(roc.FPR)
     tpr = np.asarray(roc.TPR)
-    cutoff = min(int(np.searchsorted(fpr, 0.01, side="left")), len(fpr) - 1)
-
-    # Include every molecule at the threshold when scores are tied.
     sorted_scores = feed[:, 1]
-    while cutoff + 1 < len(sorted_scores) and sorted_scores[cutoff + 1] == sorted_scores[cutoff]:
-        cutoff += 1
-    bayes_ef = float(tpr[cutoff] / fpr[cutoff]) if fpr[cutoff] > 0 else float("nan")
+
+    def bayes_enrichment(fraction: float) -> float:
+        cutoff = min(
+            int(np.searchsorted(fpr, fraction, side="left")), len(fpr) - 1
+        )
+        # Include every molecule at the threshold when scores are tied.
+        while (
+            cutoff + 1 < len(sorted_scores)
+            and sorted_scores[cutoff + 1] == sorted_scores[cutoff]
+        ):
+            cutoff += 1
+        return (
+            float(tpr[cutoff] / fpr[cutoff])
+            if fpr[cutoff] > 0
+            else float("nan")
+        )
+
+    ends = np.r_[
+        np.flatnonzero(sorted_scores[:-1] != sorted_scores[1:]),
+        len(sorted_scores) - 1,
+    ]
+    true_positives = np.cumsum(feed[:, 0])[ends]
+    precision = true_positives / (ends + 1)
+    recall = true_positives / int(labels.sum())
     bedroc_20 = float(Scoring.CalcBEDROC(feed, 0, alpha=20.0))
     bedroc_80_5 = float(Scoring.CalcBEDROC(feed, 0, alpha=80.5))
     return {
         "auc_roc": float(Scoring.CalcAUC(feed, 0)),
+        "auc_pr": float(np.sum(np.diff(np.r_[0.0, recall]) * precision)),
         "ef_0.5%": float(ef_0_5),
         "ef_1%": float(ef_1),
         "ef_5%": float(ef_5),
         "bedroc_20": bedroc_20,
         "bedroc_80_5": bedroc_80_5,
-        "bayes_ef_1%": bayes_ef,
+        "bedroc_85": float(Scoring.CalcBEDROC(feed, 0, alpha=85.0)),
+        "bayes_ef_0.5%": bayes_enrichment(0.005),
+        "bayes_ef_1%": bayes_enrichment(0.01),
+        "bayes_ef_5%": bayes_enrichment(0.05),
     }
 
 

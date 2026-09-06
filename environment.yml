@@ -1,0 +1,23 @@
+name: tactivs
+
+channels:
+  - pytorch
+  - nvidia
+  - pyg
+  - conda-forge
+
+dependencies:
+  - python=3.10
+  - pytorch::pytorch=2.1.2
+  - pytorch::pytorch-cuda=12.1
+  - pyg::pyg
+  - pyg::pytorch-scatter
+  - numpy=1.26.4
+  - pandas=2.3.3
+  - rdkit=2022.03.5
+  - scipy
+  - tqdm
+  - pip
+  - pip:
+      - xformers==0.0.23.post1
+      - -e .

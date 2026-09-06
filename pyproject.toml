@@ -7,13 +7,11 @@ name = "tactivs"
 version = "0.1.0"
 description = "Reference-only transductive molecular library ranking"
 readme = "README.md"
-license = "LicenseRef-TACTIVS-Commercial-Notice-1.0"
-license-files = ["LICENSE", "COMMERCIAL_USE.md"]
+license = {file = "LICENSE"}
 keywords = ["virtual-screening", "molecular-embeddings", "transductive-inference"]
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
   "numpy>=1.24",
-  "optuna>=4.0",
   "pandas>=2.0",
   "rdkit>=2022.3",
   "torch>=2.1",
@@ -22,9 +20,17 @@ dependencies = [
 [project.scripts]
 tactivs-infer = "tactivs.cli:infer_main"
 tactivs-build-reference-pool = "tactivs.cli:build_reference_pool_main"
+tactivs-build-cache = "tactivs.cli:build_cache_main"
+tactivs-fit-whitener = "tactivs.cli:fit_whitener_main"
+tactivs-benchmark = "tactivs.benchmark:main"
 
 [project.optional-dependencies]
-test = ["pytest>=8.0"]
+ept = [
+  "scipy>=1.10",
+  "torch-geometric>=2.5",
+  "torch-scatter>=2.1",
+  "tqdm>=4.60",
+]
 
 [tool.setuptools]
 include-package-data = true
@@ -32,5 +38,5 @@ include-package-data = true
 [tool.setuptools.packages.find]
 where = ["src"]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
+[tool.setuptools.package-data]
+"tactivs._vendor.ept" = ["LICENSE"]

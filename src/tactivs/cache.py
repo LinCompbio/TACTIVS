@@ -1,4 +1,4 @@
-"""Readers for the sharded EPT embedding cache used by the experiments."""
+"""Read benchmark and user EPT embedding caches."""
 
 from __future__ import annotations
 
@@ -73,23 +73,36 @@ class EmbeddingStore:
         self.starts = np.cumsum([0] + [array.shape[0] for array in self.arrays[:-1]])
         self.ends = np.cumsum([array.shape[0] for array in self.arrays])
 
-    def load(self, start: int, end: int, device: torch.device) -> torch.Tensor:
+    def load_ranges(
+        self, starts: np.ndarray, counts: np.ndarray, device: torch.device
+    ) -> torch.Tensor:
+        """Gather molecule ranges from a shared, possibly non-contiguous store."""
+        starts = np.asarray(starts, dtype=np.int64)
+        counts = np.asarray(counts, dtype=np.int64)
+        if starts.shape != counts.shape or np.any(counts < 1):
+            raise ValueError("invalid embedding ranges")
+        if np.any(starts < 0) or np.any(starts + counts > self.ends[-1]):
+            raise ValueError("embedding range lies outside the shard store")
+
         output = torch.empty(
-            (end - start, self.dim), dtype=torch.float32, device=device
+            (int(counts.sum()), self.dim), dtype=torch.float32, device=device
         )
-        cursor = start
-        while cursor < end:
-            shard = int(np.searchsorted(self.ends, cursor, side="right"))
-            shard_start = int(self.starts[shard])
-            take_end = min(end, int(self.ends[shard]), cursor + 20000)
-            block = np.array(
-                self.arrays[shard][cursor - shard_start : take_end - shard_start],
-                copy=True,
-            )
-            output[cursor - start : take_end - start] = torch.from_numpy(block).to(
-                device=device, dtype=torch.float32
-            )
-            cursor = take_end
+        cursor = 0
+        for begin in range(0, len(starts), 20000):
+            block_starts = starts[begin : begin + 20000]
+            block_counts = counts[begin : begin + 20000]
+            width = int(block_counts.max())
+            offsets = np.arange(width, dtype=np.int64)[None, :]
+            valid = offsets < block_counts[:, None]
+            rows = (block_starts[:, None] + offsets)[valid]
+            shard_codes = np.searchsorted(self.ends, rows, side="right")
+            block = np.empty((len(rows), self.dim), dtype=np.float32)
+            for shard in np.unique(shard_codes):
+                mask = shard_codes == shard
+                local_rows = rows[mask] - int(self.starts[int(shard)])
+                block[mask] = self.arrays[int(shard)][local_rows]
+            output[cursor : cursor + len(rows)] = torch.from_numpy(block).to(device)
+            cursor += len(rows)
         return output
 
 
@@ -98,48 +111,41 @@ class EmbeddingCache:
 
     def __init__(self, cache: Path):
         self.cache = Path(cache)
-        self.store = EmbeddingStore(self.cache)
-        self.manifest_path = self.cache / "target_manifest.npz"
-        parent_path = self.cache / "target_parent_ids.npz"
-        if not self.manifest_path.exists() or not parent_path.exists():
-            raise FileNotFoundError(
-                "cache requires target_manifest.npz and target_parent_ids.npz"
-            )
-
-        with np.load(self.manifest_path, allow_pickle=False) as data:
+        self.index_path = self.cache / "index.npz"
+        if not self.index_path.is_file():
+            raise FileNotFoundError(f"embedding index not found: {self.index_path}")
+        self.store = EmbeddingStore(self.cache / "embeddings")
+        with np.load(self.index_path, allow_pickle=False) as data:
             target_ids = list(map(str, data["target_ids"]))
-            offsets = data["parent_offsets"].astype(np.int64)
-            starts = data["parent_starts"].astype(np.int64)
-            counts = data["parent_counts"].astype(np.int64)
-            target_starts = data["target_starts"].astype(np.int64)
-            target_ends = data["target_ends"].astype(np.int64)
+            offsets = np.asarray(data["parent_offsets"], dtype=np.int64)
+            parent_ids = np.asarray(data["parent_ids"])
+            starts = np.asarray(data["parent_starts"], dtype=np.int64)
+            counts = np.asarray(data["parent_counts"], dtype=np.int64)
+            has_labels = "parent_labels" in data
+        if len(offsets) != len(target_ids) + 1 or offsets[0] != 0:
+            raise ValueError("invalid target offsets in embedding index")
+        if offsets[-1] != len(parent_ids):
+            raise ValueError("embedding index offsets do not cover parent IDs")
+        if not (len(parent_ids) == len(starts) == len(counts)):
+            raise ValueError("embedding index parent arrays have inconsistent lengths")
+        if len(set(target_ids)) != len(target_ids):
+            raise ValueError("embedding index contains duplicate target IDs")
+
         self.meta = {}
+        self.parent_ids = {}
         for index, target_id in enumerate(target_ids):
             begin, end = int(offsets[index]), int(offsets[index + 1])
-            row_start = int(target_starts[index])
             self.meta[target_id] = {
                 "index": index,
                 "parent_begin": begin,
                 "parent_end": end,
-                "row_start": row_start,
-                "row_end": int(target_ends[index]),
-                "parent_starts": starts[begin:end] - row_start,
-                "parent_counts": counts[begin:end],
+                "parent_starts": starts[begin:end].copy(),
+                "parent_counts": counts[begin:end].copy(),
             }
-
-        with np.load(parent_path, allow_pickle=False) as data:
-            parent_target_ids = list(map(str, data["target_ids"]))
-            parent_offsets = data["parent_offsets"].astype(np.int64)
-            parent_ids = data["parent_ids"]
-        if parent_target_ids != target_ids:
-            raise ValueError("target IDs differ between cache manifests")
-        self.parent_ids = {
-            target_id: parent_ids[
-                int(parent_offsets[i]) : int(parent_offsets[i + 1])
-            ].copy()
-            for i, target_id in enumerate(target_ids)
-        }
-        self._parent_labels: np.ndarray | None = None
+            self.parent_ids[target_id] = parent_ids[begin:end].copy()
+        self.has_labels = has_labels
+        self.parent_count = len(parent_ids)
+        self._parent_labels = None
 
     @property
     def target_ids(self) -> list[str]:
@@ -147,10 +153,17 @@ class EmbeddingCache:
 
     def get_parent_labels(self, target_id: str) -> np.ndarray:
         """Read complete parent labels for benchmark episode construction."""
+        if not self.has_labels:
+            raise ValueError(f"target {target_id} does not contain activity labels")
         meta = self.meta[target_id]
         if self._parent_labels is None:
-            with np.load(self.manifest_path, allow_pickle=False) as data:
-                self._parent_labels = data["parent_labels"].astype(np.int8)
+            with np.load(self.index_path, allow_pickle=False) as data:
+                labels = np.asarray(data["parent_labels"], dtype=np.int8)
+            if len(labels) != self.parent_count:
+                raise ValueError("activity labels do not match parent IDs")
+            if not set(map(int, np.unique(labels))) <= {0, 1}:
+                raise ValueError("activity labels must be binary")
+            self._parent_labels = labels
         return self._parent_labels[meta["parent_begin"] : meta["parent_end"]].copy()
 
     def get(
@@ -162,8 +175,11 @@ class EmbeddingCache:
         retain_raw: bool = False,
     ) -> TargetData:
         meta = self.meta[target_id]
-        raw = self.store.load(meta["row_start"], meta["row_end"], device)
         counts = meta["parent_counts"].copy()
+        raw = self.store.load_ranges(meta["parent_starts"], counts, device)
+        parent_starts = np.concatenate(([0], np.cumsum(counts[:-1]))).astype(
+            np.int64
+        )
         embeddings = (
             external_whiten(raw, projection, counts)
             if projection is not None
@@ -176,17 +192,51 @@ class EmbeddingCache:
             target_id=target_id,
             embeddings=embeddings,
             parent_ids=self.parent_ids[target_id].copy(),
-            parent_starts=meta["parent_starts"].copy(),
+            parent_starts=parent_starts,
             parent_counts=counts,
             parent_labels=labels,
             raw_embeddings=raw if retain_raw else None,
             projection=projection if retain_raw else None,
         )
 
-    def get_raw(self, target_id: str, device: torch.device) -> torch.Tensor:
-        """Load unnormalized conformer embeddings for an individual target."""
+    def get_subset(
+        self,
+        target_id: str,
+        selected_parent_ids: set[str],
+        device: torch.device,
+        projection: torch.Tensor | None = None,
+        include_labels: bool = False,
+        retain_raw: bool = False,
+    ) -> TargetData:
+        """Load selected parents directly from a shared embedding store."""
+        selected = set(map(str, selected_parent_ids))
+        parent_ids = self.parent_ids[target_id].astype(str)
+        mask = np.asarray([parent in selected for parent in parent_ids])
+        missing = selected - set(parent_ids[mask])
+        if missing:
+            raise KeyError(f"parent IDs absent from {target_id}: {sorted(missing)}")
+        if not mask.any():
+            raise ValueError("selected parent set is empty")
         meta = self.meta[target_id]
-        return self.store.load(meta["row_start"], meta["row_end"], device)
+        counts = meta["parent_counts"][mask].copy()
+        raw = self.store.load_ranges(meta["parent_starts"][mask], counts, device)
+        starts = np.concatenate(([0], np.cumsum(counts[:-1]))).astype(np.int64)
+        embeddings = (
+            external_whiten(raw, projection, counts)
+            if projection is not None
+            else F.normalize(raw, dim=1)
+        )
+        labels = self.get_parent_labels(target_id)[mask] if include_labels else None
+        return TargetData(
+            target_id=target_id,
+            embeddings=embeddings,
+            parent_ids=self.parent_ids[target_id][mask].copy(),
+            parent_starts=starts,
+            parent_counts=counts,
+            parent_labels=labels,
+            raw_embeddings=raw if retain_raw else None,
+            projection=projection if retain_raw else None,
+        )
 
 
 def subset_target(target: TargetData, parent_mask: np.ndarray) -> TargetData:

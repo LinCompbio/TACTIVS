@@ -11,13 +11,15 @@ import torch
 
 from .cache import EmbeddingCache, load_projection
 from .core import score_library
+from .encoding import build_embedding_cache
 from .provenance import configure_determinism
 from .reference_pool import (
     EPTConformerEncoder,
     ReferencePool,
-    build_uploaded_pool,
-    read_uploaded_molecules,
+    build_reference_pool,
+    read_molecules,
 )
+from .whitening import fit_whitener
 
 
 def infer_main() -> None:
@@ -39,6 +41,12 @@ def infer_main() -> None:
         type=Path,
         help="Use an encoded external reference-pool artifact.",
     )
+    reference.add_argument(
+        "--reference-ids",
+        nargs="+",
+        metavar="ID",
+        help="Use known active molecule IDs already present in the cache.",
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--theta", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -58,7 +66,7 @@ def infer_main() -> None:
             include_labels=True,
         )
         pool = ReferencePool.sample_labeled(target, args.sample_labeled, args.seed)
-    else:
+    elif args.reference_pool is not None:
         target = cache.get(
             args.target,
             device,
@@ -67,6 +75,16 @@ def infer_main() -> None:
             retain_raw=True,
         )
         pool = ReferencePool.load(args.reference_pool, device)
+    else:
+        target = cache.get(
+            args.target,
+            device,
+            projection=projection,
+            include_labels=False,
+        )
+        pool = ReferencePool.from_cached_ids(
+            args.reference_ids, source="cached_known_actives"
+        )
     target, references = pool.materialize(target, projection)
     result = score_library(target, references, params)
 
@@ -87,7 +105,8 @@ def infer_main() -> None:
             {
                 "target": args.target,
                 "reference_mode": pool.source,
-                "references": len(references),
+                "references": references,
+                "library_molecules": len(target.parent_ids),
                 "ranked_molecules": len(result.parent_ids),
                 "output": str(args.output),
             },
@@ -102,31 +121,16 @@ def build_reference_pool_main() -> None:
     )
     parser.add_argument("--molecules", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--ept-root", type=Path, required=True)
-    parser.add_argument(
-        "--ept-ranking-root",
-        type=Path,
-        required=True,
-        help="Path to the upstream EPT ranking source tree containing models/ and data/.",
-    )
-    parser.add_argument("--encoder-checkpoint", type=Path, required=True)
     parser.add_argument("--conformers", type=int, default=10)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--batch-size", type=int, default=128)
-    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    _add_ept_arguments(parser)
     args = parser.parse_args()
 
     configure_determinism(args.seed)
     device = torch.device(args.device)
-    records = read_uploaded_molecules(args.molecules)
-    encoder = EPTConformerEncoder(
-        args.ept_root,
-        args.ept_ranking_root,
-        args.encoder_checkpoint,
-        device,
-        batch_size=args.batch_size,
-    )
-    pool = build_uploaded_pool(
+    records = read_molecules(args.molecules)
+    encoder = _load_ept_encoder(args, device)
+    pool = build_reference_pool(
         records,
         encoder,
         conformers_per_molecule=args.conformers,
@@ -143,4 +147,68 @@ def build_reference_pool_main() -> None:
             },
             indent=2,
         )
+    )
+
+
+def build_cache_main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Generate a TACTIVS EPT cache for a molecular library."
+    )
+    parser.add_argument("--molecules", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--target", default="library")
+    parser.add_argument("--conformers", type=int, default=10)
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--molecule-batch-size", type=int, default=256)
+    _add_ept_arguments(parser)
+    args = parser.parse_args()
+
+    configure_determinism(args.seed)
+    device = torch.device(args.device)
+    records = read_molecules(args.molecules)
+    encoder = _load_ept_encoder(args, device)
+    info = build_embedding_cache(
+        records,
+        encoder,
+        args.output,
+        target_id=args.target,
+        conformers_per_molecule=args.conformers,
+        seed=args.seed,
+        molecule_batch_size=args.molecule_batch_size,
+    )
+    print(json.dumps({"cache": str(args.output), **info}, indent=2))
+
+
+def fit_whitener_main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Fit a covariance-only whitener from an EPT cache."
+    )
+    parser.add_argument("--cache", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--shrinkage", type=float, default=0.01)
+    parser.add_argument("--eps", type=float, default=1e-5)
+    parser.add_argument("--molecule-batch-size", type=int, default=4096)
+    args = parser.parse_args()
+
+    info = fit_whitener(
+        args.cache,
+        args.output,
+        shrinkage=args.shrinkage,
+        eps=args.eps,
+        molecule_batch_size=args.molecule_batch_size,
+    )
+    print(json.dumps({"whitener": str(args.output), **info}, indent=2))
+
+
+def _add_ept_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--encoder-checkpoint", type=Path, required=True)
+    parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+
+
+def _load_ept_encoder(args, device: torch.device) -> EPTConformerEncoder:
+    return EPTConformerEncoder(
+        args.encoder_checkpoint,
+        device,
+        batch_size=args.batch_size,
     )

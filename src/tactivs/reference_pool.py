@@ -1,4 +1,4 @@
-"""Reference-pool construction for labelled benchmarks and uploaded molecules."""
+"""Known-active reference pools for benchmark and user inference."""
 
 from __future__ import annotations
 
@@ -12,10 +12,9 @@ from typing import Protocol
 import numpy as np
 import torch
 from rdkit import Chem
-from rdkit.Chem.rdDistGeom import EmbedMultipleConfs, ETKDGv3
+from rdkit.Chem.rdDistGeom import ETKDGv3, EmbedMultipleConfs
 
 from .cache import TargetData, external_whiten
-from .episodes import stable_seed
 
 
 @dataclass(frozen=True)
@@ -35,11 +34,11 @@ class ReferencePool:
     @classmethod
     def from_cached_ids(
         cls, parent_ids: list[str], source: str = "cached_references"
-    ) -> ReferencePool:
+    ) -> "ReferencePool":
         if not parent_ids:
             raise ValueError("reference pool is empty")
         return cls(
-            parent_ids=np.asarray(list(map(str, parent_ids))),
+            parent_ids=np.asarray(parent_ids, dtype=str),
             parent_counts=np.zeros(len(parent_ids), dtype=np.int64),
             raw_embeddings=None,
             source=source,
@@ -48,13 +47,13 @@ class ReferencePool:
     @classmethod
     def sample_labeled(
         cls, target: TargetData, k: int, seed: int = 0
-    ) -> ReferencePool:
+    ) -> "ReferencePool":
         if target.parent_labels is None:
-            raise ValueError("labelled sampling requires parent labels")
+            raise ValueError("benchmark reference sampling requires labels")
         active_ids = sorted(
-            str(parent)
-            for parent, label in zip(target.parent_ids, target.parent_labels)
-            if int(label) == 1
+            str(parent_id)
+            for parent_id, label in zip(target.parent_ids, target.parent_labels)
+            if label == 1
         )
         if k < 1:
             raise ValueError("K must be positive")
@@ -62,21 +61,19 @@ class ReferencePool:
             raise ValueError(
                 f"target {target.target_id} has {len(active_ids)} actives, fewer than K={k}"
             )
-        rng = random.Random(stable_seed(seed, f"fixed_random:{target.target_id}"))
-        rng.shuffle(active_ids)
-        return cls.from_cached_ids(active_ids[:k], source="labelled_sample")
+        random.Random(seed).shuffle(active_ids)
+        return cls.from_cached_ids(active_ids[:k], source="benchmark_actives")
 
     def save(self, path: Path) -> None:
         if self.raw_embeddings is None:
-            raise ValueError("only encoded external reference pools can be saved")
+            raise ValueError("only encoded reference pools can be saved")
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         np.savez_compressed(
             path,
             parent_ids=self.parent_ids,
             parent_counts=self.parent_counts,
-            raw_embeddings=self.raw_embeddings.detach().cpu().numpy(),
-            source=np.asarray(self.source),
+            raw_embeddings=self.raw_embeddings.cpu().numpy(),
             canonical_smiles=(
                 np.asarray([], dtype=str)
                 if self.canonical_smiles is None
@@ -85,22 +82,19 @@ class ReferencePool:
         )
 
     @classmethod
-    def load(cls, path: Path, device: torch.device) -> ReferencePool:
+    def load(cls, path: Path, device: torch.device) -> "ReferencePool":
         with np.load(path, allow_pickle=False) as data:
-            parent_ids = np.asarray(data["parent_ids"]).astype(str)
-            counts = np.asarray(data["parent_counts"], dtype=np.int64)
-            raw = torch.as_tensor(
-                np.asarray(data["raw_embeddings"], dtype=np.float32), device=device
+            pool = cls(
+                parent_ids=np.asarray(data["parent_ids"]).astype(str),
+                parent_counts=np.asarray(data["parent_counts"], dtype=np.int64),
+                raw_embeddings=torch.as_tensor(
+                    np.asarray(data["raw_embeddings"], dtype=np.float32), device=device
+                ),
+                source="external_actives",
+                canonical_smiles=np.asarray(data["canonical_smiles"]).astype(str),
             )
-            smiles = np.asarray(data["canonical_smiles"]).astype(str)
-            source = str(np.asarray(data["source"]).item())
-        pool = cls(
-            parent_ids=parent_ids,
-            parent_counts=counts,
-            raw_embeddings=raw,
-            source=source,
-            canonical_smiles=smiles if len(smiles) else None,
-        )
+        if not len(pool.canonical_smiles):
+            pool.canonical_smiles = None
         pool.validate()
         return pool
 
@@ -108,112 +102,116 @@ class ReferencePool:
         if not len(self.parent_ids):
             raise ValueError("reference pool is empty")
         if len(set(map(str, self.parent_ids))) != len(self.parent_ids):
-            raise ValueError("reference pool contains duplicate parent IDs")
+            raise ValueError("reference pool contains duplicate molecule IDs")
         if self.raw_embeddings is None:
             return
         if len(self.parent_counts) != len(self.parent_ids):
-            raise ValueError("reference pool counts do not match parent IDs")
+            raise ValueError("reference conformer counts do not match molecule IDs")
         if np.any(self.parent_counts < 1):
-            raise ValueError("every external reference requires at least one conformer")
-        if int(self.parent_counts.sum()) != len(self.raw_embeddings):
+            raise ValueError("each reference molecule needs at least one conformer")
+        if self.parent_counts.sum() != len(self.raw_embeddings):
             raise ValueError("reference conformer counts do not match embeddings")
 
     def materialize(
         self, target: TargetData, projection: torch.Tensor | None
     ) -> tuple[TargetData, list[str]]:
+        """Place cached or external actives in the library used by the scorer."""
         self.validate()
         reference_ids = list(map(str, self.parent_ids))
         if self.raw_embeddings is None:
             return replace(target, parent_labels=None), reference_ids
-        if projection is None:
-            raise ValueError("external references require a whitening projection")
-        if target.raw_embeddings is None:
-            raise ValueError("external references require raw candidate embeddings")
-        collisions = sorted(set(reference_ids) & set(map(str, target.parent_ids)))
+        if target.raw_embeddings is None or projection is None:
+            raise ValueError(
+                "external references require raw candidate embeddings and a whitener"
+            )
+        collisions = set(reference_ids) & set(map(str, target.parent_ids))
         if collisions:
-            raise ValueError(f"external reference IDs collide with library IDs: {collisions}")
-        raw_references = self.raw_embeddings.to(
+            raise ValueError(
+                f"reference IDs already exist in the candidate library: {sorted(collisions)}"
+            )
+
+        references = self.raw_embeddings.to(
             device=target.raw_embeddings.device, dtype=target.raw_embeddings.dtype
         )
-        if raw_references.shape[1] != target.raw_embeddings.shape[1]:
-            raise ValueError(
-                "reference and candidate embedding dimensions do not match"
-            )
-        raw = torch.cat((target.raw_embeddings, raw_references), dim=0)
+        if references.shape[1] != target.raw_embeddings.shape[1]:
+            raise ValueError("reference and candidate embedding dimensions differ")
+        raw = torch.cat((target.raw_embeddings, references))
         counts = np.concatenate((target.parent_counts, self.parent_counts))
         starts = np.concatenate(([0], np.cumsum(counts[:-1]))).astype(np.int64)
-        embeddings = external_whiten(raw, projection, counts)
-        combined = TargetData(
-            target_id=target.target_id,
-            embeddings=embeddings,
-            parent_ids=np.concatenate((target.parent_ids.astype(str), self.parent_ids)),
-            parent_starts=starts,
-            parent_counts=counts,
-            parent_labels=None,
-            raw_embeddings=raw,
-            projection=projection,
+        return (
+            TargetData(
+                target_id=target.target_id,
+                embeddings=external_whiten(raw, projection, counts),
+                parent_ids=np.concatenate((target.parent_ids.astype(str), self.parent_ids)),
+                parent_starts=starts,
+                parent_counts=counts,
+                raw_embeddings=raw,
+                projection=projection,
+            ),
+            reference_ids,
         )
-        return combined, reference_ids
 
 
 class ConformerEncoder(Protocol):
     def encode(self, conformers: list[Chem.Mol]) -> torch.Tensor: ...
 
 
-def read_uploaded_molecules(path: Path) -> list[MoleculeRecord]:
+def read_molecules(path: Path) -> list[MoleculeRecord]:
     path = Path(path)
-    suffix = path.suffix.lower()
     records: list[MoleculeRecord] = []
-    if suffix == ".csv":
+    if path.suffix.lower() == ".csv":
         with path.open(newline="") as handle:
             reader = csv.DictReader(handle)
             fields = set(reader.fieldnames or [])
             smiles_field = "canonical_smiles" if "canonical_smiles" in fields else "smiles"
-            required = {"parent_molecule_id", smiles_field}
-            missing = required - fields
+            missing = {"parent_molecule_id", smiles_field} - fields
             if missing:
-                raise ValueError(f"reference CSV missing columns: {sorted(missing)}")
-            for row in reader:
-                records.append(
-                    _canonical_record(row["parent_molecule_id"], row[smiles_field])
-                )
-    elif suffix in {".sdf", ".mol"}:
-        supplier = (
+                raise ValueError(f"molecule CSV missing columns: {sorted(missing)}")
+            records = [
+                _molecule_record(row["parent_molecule_id"], row[smiles_field])
+                for row in reader
+            ]
+    elif path.suffix.lower() in {".sdf", ".mol"}:
+        molecules = (
             Chem.SDMolSupplier(str(path), removeHs=False)
-            if suffix == ".sdf"
+            if path.suffix.lower() == ".sdf"
             else [Chem.MolFromMolFile(str(path), removeHs=False)]
         )
-        for index, molecule in enumerate(supplier):
+        for index, molecule in enumerate(molecules, 1):
             if molecule is None:
-                raise ValueError(f"invalid molecule {index + 1} in {path}")
+                raise ValueError(f"invalid molecule {index} in {path}")
             parent_id = (
                 molecule.GetProp("_Name").strip()
                 if molecule.HasProp("_Name") and molecule.GetProp("_Name").strip()
-                else f"reference_{index + 1}"
+                else f"molecule_{index}"
             )
-            smiles = Chem.MolToSmiles(
-                Chem.RemoveHs(molecule), canonical=True, isomericSmiles=True
+            records.append(
+                _molecule_record(
+                    parent_id,
+                    Chem.MolToSmiles(Chem.RemoveHs(molecule), isomericSmiles=True),
+                )
             )
-            records.append(_canonical_record(parent_id, smiles))
     else:
-        raise ValueError("uploaded references must be CSV, SDF, or MOL")
+        raise ValueError("molecule input must be CSV, SDF, or MOL")
     if not records:
-        raise ValueError("uploaded reference file contains no molecules")
+        raise ValueError("molecule input is empty")
     parent_ids = [record.parent_id for record in records]
     if len(parent_ids) != len(set(parent_ids)):
-        raise ValueError("uploaded reference IDs must be unique")
+        raise ValueError("molecule IDs must be unique")
     return records
 
 
-def _canonical_record(parent_id: str, smiles: str) -> MoleculeRecord:
+def _molecule_record(parent_id: str, smiles: str) -> MoleculeRecord:
     parent_id = str(parent_id).strip()
     if not parent_id:
-        raise ValueError("reference parent ID is empty")
+        raise ValueError("molecule ID is empty")
     molecule = Chem.MolFromSmiles(str(smiles).strip())
     if molecule is None:
-        raise ValueError(f"invalid reference SMILES for {parent_id}")
-    canonical = Chem.MolToSmiles(molecule, canonical=True, isomericSmiles=True)
-    return MoleculeRecord(parent_id=parent_id, canonical_smiles=canonical)
+        raise ValueError(f"invalid SMILES for {parent_id}")
+    return MoleculeRecord(
+        parent_id,
+        Chem.MolToSmiles(molecule, canonical=True, isomericSmiles=True),
+    )
 
 
 def generate_conformers(
@@ -221,47 +219,41 @@ def generate_conformers(
 ) -> tuple[list[Chem.Mol], np.ndarray]:
     if conformers_per_molecule < 1:
         raise ValueError("conformers_per_molecule must be positive")
-    conformers: list[Chem.Mol] = []
+    conformers = []
     counts = []
     for record in records:
         molecule = Chem.AddHs(Chem.MolFromSmiles(record.canonical_smiles))
         params = ETKDGv3()
         params.useRandomCoords = True
-        params.randomSeed = int(stable_seed(seed, record.parent_id) % (2**31 - 1))
-        conformer_ids = list(
-            EmbedMultipleConfs(
-                molecule, numConfs=conformers_per_molecule, params=params
-            )
+        params.randomSeed = seed % (2**31 - 1)
+        conformer_ids = EmbedMultipleConfs(
+            molecule, numConfs=conformers_per_molecule, params=params
         )
         if not conformer_ids:
-            raise RuntimeError(f"ETKDGv3 failed for reference {record.parent_id}")
+            raise RuntimeError(f"conformer generation failed for {record.parent_id}")
         heavy = Chem.RemoveHs(molecule)
-        count = 0
         for conformer_id in range(heavy.GetNumConformers()):
-            single = Chem.Mol(heavy)
-            conformer = Chem.Conformer(heavy.GetConformer(conformer_id))
-            single.RemoveAllConformers()
-            single.AddConformer(conformer, assignId=True)
-            single.SetProp("_Name", f"{record.parent_id}#{conformer_id}")
-            conformers.append(single)
-            count += 1
-        counts.append(count)
+            conformer = Chem.Mol(heavy)
+            conformer.RemoveAllConformers()
+            conformer.AddConformer(Chem.Conformer(heavy.GetConformer(conformer_id)))
+            conformer.SetProp("_Name", f"{record.parent_id}#{conformer_id}")
+            conformers.append(conformer)
+        counts.append(heavy.GetNumConformers())
     return conformers, np.asarray(counts, dtype=np.int64)
 
 
-def build_uploaded_pool(
+def build_reference_pool(
     records: list[MoleculeRecord],
     encoder: ConformerEncoder,
     conformers_per_molecule: int = 10,
     seed: int = 0,
 ) -> ReferencePool:
     conformers, counts = generate_conformers(records, conformers_per_molecule, seed)
-    embeddings = encoder.encode(conformers)
     pool = ReferencePool(
         parent_ids=np.asarray([record.parent_id for record in records]),
         parent_counts=counts,
-        raw_embeddings=embeddings,
-        source="uploaded_molecules",
+        raw_embeddings=encoder.encode(conformers),
+        source="external_actives",
         canonical_smiles=np.asarray([record.canonical_smiles for record in records]),
     )
     pool.validate()
@@ -269,39 +261,47 @@ def build_uploaded_pool(
 
 
 class EPTConformerEncoder:
-    """Adapter for the frozen ligand-only EPT graph-representation path."""
+    """EPT ligand encoder used to build candidate and reference caches."""
 
     def __init__(
         self,
-        ept_root: Path,
-        ranking_root: Path,
         checkpoint: Path,
         device: torch.device,
         batch_size: int = 128,
-    ):
+    ) -> None:
         self.device = device
         self.batch_size = batch_size
-        root = Path(ept_root).resolve()
-        ranking_root = Path(ranking_root).resolve()
-        if not root.exists():
-            raise FileNotFoundError(f"EPT source root not found at {root}")
-        if not ranking_root.exists():
-            raise FileNotFoundError(f"EPT ranking source tree not found at {ranking_root}")
-        sys.path.insert(0, str(root))
-        sys.path.insert(0, str(ranking_root))
-        # Register the upstream modules required to deserialize the legacy checkpoint.
-        import models
-        import models.wrappers  # noqa: F401 -- required by checkpoint unpickling
+        ept_root = Path(__file__).parent / "_vendor" / "ept"
+        if str(ept_root) not in sys.path:
+            sys.path.insert(0, str(ept_root))
+
+        import models  # noqa: F401
+        import models.wrappers  # noqa: F401
         from data.converter.blocks_to_data import blocks_to_data
         from data.converter.rdkit_to_blocks import rdkit_to_blocks
         from data.mmap_dataset import MMAPDataset
+        from models.wrappers.denoise_pretrain import Denoise
+
+        checkpoint = Path(checkpoint)
+        if not checkpoint.is_file():
+            raise FileNotFoundError(f"EPT checkpoint not found: {checkpoint}")
+        saved_model = torch.load(checkpoint, map_location="cpu", weights_only=False)
+        encoder_config = dict(saved_model.encoder_config)
+        encoder_config["efficient"] = False
+        model = Denoise(
+            encoder=encoder_config,
+            graph_constructor=saved_model.graph_config,
+            n_noise_level=len(saved_model.sigmas),
+            rot_n_noise_level=len(saved_model.rot_sigmas),
+            noise_type=saved_model.noise_type,
+            pred_type=saved_model.pred_type,
+        )
+        model.load_state_dict(saved_model.state_dict(), strict=True)
 
         self.blocks_to_data = blocks_to_data
         self.rdkit_to_blocks = rdkit_to_blocks
         self.collate = MMAPDataset.collate_fn
-        self.model = torch.load(checkpoint, map_location="cpu", weights_only=False)
-        _patch_legacy_checkpoint_flags(self.model)
-        self.model.eval().to(device)
+        self.model = model.eval().to(device)
 
     @torch.no_grad()
     def encode(self, conformers: list[Chem.Mol]) -> torch.Tensor:
@@ -313,17 +313,15 @@ class EPTConformerEncoder:
                 if not blocks:
                     raise ValueError(f"EPT conversion failed for {molecule.GetProp('_Name')}")
                 example = self.blocks_to_data(blocks)
-                # The upstream collator requires this inert field; inference ignores it.
                 example["label"] = 0
                 example["pair_id"] = molecule.GetProp("_Name")
                 examples.append(example)
-            batch = self.collate(examples)
             batch = {
                 key: value.to(self.device) if torch.is_tensor(value) else value
-                for key, value in batch.items()
+                for key, value in self.collate(examples).items()
             }
             outputs.append(_encode_graph_repr(self.model, batch))
-        return torch.cat(outputs, dim=0)
+        return torch.cat(outputs)
 
 
 @torch.no_grad()
@@ -341,15 +339,12 @@ def _encode_graph_repr(model: torch.nn.Module, batch: dict) -> torch.Tensor:
     positions = model.normalize(
         graph.unit_pos, block_type, graph.unit2block, graph.batch_ids
     )
-    positions, _ = model.update_global_block(
-        positions, block_type, graph.unit2block
-    )
+    positions, _ = model.update_global_block(positions, block_type, graph.unit2block)
     edges = graph.edges
-    keep = torch.logical_and(
-        block_type[edges[0]] != model.global_block_id,
-        block_type[edges[1]] != model.global_block_id,
+    keep = (block_type[edges[0]] != model.global_block_id) & (
+        block_type[edges[1]] != model.global_block_id
     )
-    edges, edge_attr = (edges.T[keep]).T, graph.edge_attr[keep]
+    edges, edge_attr = edges[:, keep], graph.edge_attr[keep]
     _, _, graph_repr, _ = model.encoder(
         graph.unit_features,
         positions,
@@ -359,31 +354,3 @@ def _encode_graph_repr(model: torch.nn.Module, batch: dict) -> torch.Tensor:
         edge_attr,
     )
     return graph_repr.detach().float().cpu()
-
-
-def _patch_legacy_checkpoint_flags(model: torch.nn.Module) -> None:
-    """Fill attributes absent from the frozen epoch-49 checkpoint schema."""
-    try:
-        from models.TransAllAtom import xtrans_act
-
-        has_attention = bool(getattr(xtrans_act, "xformers_enable", False)) and hasattr(
-            xtrans_act, "attn_func"
-        )
-    except (ImportError, AttributeError):
-        has_attention = False
-    for module in model.modules():
-        name = module.__class__.__name__
-        if name == "SelfAttnLayer" and not has_attention:
-            module.efficient = False
-        if name != "Transformer":
-            continue
-        for attribute in (
-            "use_ieconv",
-            "ieconv_share_edge_feat",
-            "zero_conv",
-            "activation_checkpointing",
-        ):
-            if not hasattr(module, attribute):
-                setattr(module, attribute, False)
-        if not has_attention and hasattr(module, "efficient"):
-            module.efficient = False
