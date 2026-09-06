@@ -149,22 +149,6 @@ def episode_masks(
     return visible, ranked
 
 
-def summarize(episodes: pd.DataFrame, output_dir: Path) -> pd.DataFrame:
-    row = {
-        "benchmark": episodes["benchmark"].iat[0],
-        "split": episodes["split"].iat[0],
-        "seed": int(episodes["seed"].iat[0]),
-        "K": int(episodes["K"].iat[0]),
-        "target_count": int(episodes["target_id"].nunique()),
-    }
-    for metric in METRICS:
-        row[f"{metric}_mean"] = float(episodes[metric].mean())
-        row[f"{metric}_std"] = float(episodes[metric].std(ddof=1))
-    summary = pd.DataFrame([row])
-    summary.to_csv(output_dir / "summary.csv", index=False)
-    return summary
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Evaluate one published TACTIVS benchmark reference protocol."
@@ -197,9 +181,6 @@ def main() -> None:
         )
     if args.k < 1 or args.k > 10:
         parser.error("--k must be between 1 and 10")
-    if args.output_dir.exists() and any(args.output_dir.iterdir()):
-        parser.error(f"--output-dir must be empty: {args.output_dir}")
-
     dataset_root = args.data_root / args.benchmark
     split_folder = "random" if args.split == "molecule-random" else args.split.replace("-", "_")
     split_root = dataset_root / "splits" / split_folder
@@ -212,9 +193,12 @@ def main() -> None:
         parser.error(f"targets unavailable for this split/seed: {sorted(unknown)}")
     if requested_targets:
         episodes = [row for row in episodes if row["target_id"] in requested_targets]
-
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    scores_path = args.output_dir / "scores.csv"
+    output_dirs = [
+        args.output_dir / row["target_id"] / f"seed_{args.seed}" for row in episodes
+    ]
+    occupied = [path for path in output_dirs if path.exists() and any(path.iterdir())]
+    if occupied:
+        parser.error(f"result directory must be empty: {occupied[0]}")
 
     configure_determinism()
     device = torch.device(args.device)
@@ -230,7 +214,6 @@ def main() -> None:
     for row in episodes:
         rows_by_target[row["target_id"]].append(row)
 
-    output_rows = []
     score_count = 0
     for target_index, target_id in enumerate(sorted(rows_by_target), 1):
         if args.split == "ave":
@@ -309,11 +292,10 @@ def main() -> None:
                 raise RuntimeError(f"{target_id}: ranked library differs from split data")
             metrics = screening_metrics(labels, result.scores)
             order = np.argsort(-result.scores, kind="stable")
+            output_dir = args.output_dir / target_id / f"seed_{args.seed}"
+            output_dir.mkdir(parents=True, exist_ok=True)
             pd.DataFrame(
                 {
-                    "target_id": target_id,
-                    "seed": args.seed,
-                    "K": episode["K"],
                     "id": result.parent_ids[order].astype(str),
                     "tactivs_score": result.scores[order],
                     "rank": np.arange(1, len(order) + 1),
@@ -322,12 +304,7 @@ def main() -> None:
                     "direct": result.direct[order],
                     "graph": result.graph[order],
                 }
-            ).to_csv(
-                scores_path,
-                mode="w" if score_count == 0 else "a",
-                header=score_count == 0,
-                index=False,
-            )
+            ).to_csv(output_dir / "scores.csv", index=False)
             score_count += len(order)
             output_row = {
                 "benchmark": args.benchmark,
@@ -344,7 +321,7 @@ def main() -> None:
                 "excluded_count": excluded,
                 **metrics,
             }
-            output_rows.append(output_row)
+            pd.DataFrame([output_row]).to_csv(output_dir / "summary.csv", index=False)
             metric_text = " ".join(
                 f"{name}={metrics[name]:.6g}" for name in METRICS
             )
@@ -356,15 +333,8 @@ def main() -> None:
                 flush=True,
             )
 
-    frame = pd.DataFrame(output_rows)
-    summary = summarize(frame, args.output_dir)
-    print("\nTarget-macro summary")
-    display = summary[["K", *[f"{metric}_mean" for metric in METRICS]]].rename(
-        columns={f"{metric}_mean": metric for metric in METRICS}
-    )
-    print(display.to_string(index=False))
     print(
-        f"\nWrote {len(frame)} targets and {score_count} molecule scores "
+        f"\nWrote {len(rows_by_target)} targets and {score_count} molecule scores "
         f"to {args.output_dir}"
     )
 
