@@ -15,6 +15,7 @@ dependencies:
   - numpy=1.26.4
   - pandas=2.3.3
   - rdkit=2022.03.5
+  - scikit-learn
   - scipy
   - tqdm
   - pip
