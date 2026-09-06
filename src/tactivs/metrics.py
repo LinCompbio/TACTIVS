@@ -33,7 +33,6 @@ def screening_metrics(labels: np.ndarray, scores: np.ndarray) -> dict[str, float
         )
 
     bedroc_20 = float(Scoring.CalcBEDROC(feed, 0, alpha=20.0))
-    bedroc_80_5 = float(Scoring.CalcBEDROC(feed, 0, alpha=80.5))
     return {
         "auc_roc": float(roc_auc_score(labels, scores)),
         "auc_pr": float(average_precision_score(labels, scores)),
@@ -41,7 +40,7 @@ def screening_metrics(labels: np.ndarray, scores: np.ndarray) -> dict[str, float
         "ef_1%": float(ef_1),
         "ef_5%": float(ef_5),
         "bedroc_20": bedroc_20,
-        "bedroc_80_5": bedroc_80_5,
+        "bedroc_80.5": float(Scoring.CalcBEDROC(feed, 0, alpha=80.5)),
         "bedroc_85": float(Scoring.CalcBEDROC(feed, 0, alpha=85.0)),
         "bayes_ef_0.5%": bayes_enrichment(0.005),
         "bayes_ef_1%": bayes_enrichment(0.01),

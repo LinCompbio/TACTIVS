@@ -30,7 +30,7 @@ METRICS = (
     "ef_1%",
     "ef_5%",
     "bedroc_20",
-    "bedroc_80_5",
+    "bedroc_80.5",
     "bedroc_85",
     "bayes_ef_0.5%",
     "bayes_ef_1%",
@@ -157,7 +157,7 @@ def summarize(
     by_k = by_k.reset_index()
     by_k.to_csv(output_dir / "summary_by_k.csv", index=False)
 
-    best = by_k.nlargest(1, "ef_0.5%_mean")
+    best = by_k.nlargest(1, "bedroc_80.5_mean")
     best.to_csv(output_dir / "summary_best.csv", index=False)
     return by_k, best
 
@@ -338,7 +338,7 @@ def main() -> None:
         columns={f"{metric}_mean": metric for metric in METRICS}
     )
     print(display.to_string(index=False))
-    print("\nBest K by target-macro EF@0.5%")
+    print("\nBest K by target-macro BEDROC with alpha 80.5")
     print(display[display["K"].isin(best["K"])].to_string(index=False))
     print(f"\nWrote {len(frame)} episodes to {args.output_dir}")
 
