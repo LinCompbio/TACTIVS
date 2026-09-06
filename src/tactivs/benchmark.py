@@ -149,17 +149,20 @@ def episode_masks(
     return visible, ranked
 
 
-def summarize(
-    episodes: pd.DataFrame, output_dir: Path
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    by_k = episodes.groupby("K")[list(METRICS)].agg(["mean", "std", "count"])
-    by_k.columns = [f"{metric}_{stat}" for metric, stat in by_k.columns]
-    by_k = by_k.reset_index()
-    by_k.to_csv(output_dir / "summary_by_k.csv", index=False)
-
-    best = by_k.nlargest(1, "bedroc_80.5_mean")
-    best.to_csv(output_dir / "summary_best.csv", index=False)
-    return by_k, best
+def summarize(episodes: pd.DataFrame, output_dir: Path) -> pd.DataFrame:
+    row = {
+        "benchmark": episodes["benchmark"].iat[0],
+        "split": episodes["split"].iat[0],
+        "seed": int(episodes["seed"].iat[0]),
+        "K": int(episodes["K"].iat[0]),
+        "target_count": int(episodes["target_id"].nunique()),
+    }
+    for metric in METRICS:
+        row[f"{metric}_mean"] = float(episodes[metric].mean())
+        row[f"{metric}_std"] = float(episodes[metric].std(ddof=1))
+    summary = pd.DataFrame([row])
+    summary.to_csv(output_dir / "summary.csv", index=False)
+    return summary
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -173,8 +176,8 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("molecule-random", "series-disjoint", "ave"),
         required=True,
     )
-    parser.add_argument("--seed", type=int, required=True)
-    parser.add_argument("--k", type=int, nargs="+", default=list(range(1, 11)))
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--k", type=int, required=True)
     parser.add_argument("--target", action="append", dest="targets")
     parser.add_argument("--theta", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -192,9 +195,8 @@ def main() -> None:
         parser.error(
             f"{args.benchmark} supports {', '.join(sorted(allowed))}, not {args.split}"
         )
-    ks = sorted(set(args.k))
-    if not ks or ks[0] < 1 or ks[-1] > 10:
-        parser.error("--k values must be between 1 and 10")
+    if args.k < 1 or args.k > 10:
+        parser.error("--k must be between 1 and 10")
     if args.output_dir.exists() and any(args.output_dir.iterdir()):
         parser.error(f"--output-dir must be empty: {args.output_dir}")
 
@@ -202,7 +204,7 @@ def main() -> None:
     split_folder = "random" if args.split == "molecule-random" else args.split.replace("-", "_")
     split_root = dataset_root / "splits" / split_folder
     episode_file = split_root / "episodes.csv"
-    episodes = read_episode_rows(episode_file, args.seed, set(ks))
+    episodes = read_episode_rows(episode_file, args.seed, {args.k})
     requested_targets = set(args.targets or [])
     available_targets = {row["target_id"] for row in episodes}
     unknown = requested_targets - available_targets
@@ -210,6 +212,9 @@ def main() -> None:
         parser.error(f"targets unavailable for this split/seed: {sorted(unknown)}")
     if requested_targets:
         episodes = [row for row in episodes if row["target_id"] in requested_targets]
+
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    scores_path = args.output_dir / "scores.csv"
 
     configure_determinism()
     device = torch.device(args.device)
@@ -226,6 +231,7 @@ def main() -> None:
         rows_by_target[row["target_id"]].append(row)
 
     output_rows = []
+    score_count = 0
     for target_index, target_id in enumerate(sorted(rows_by_target), 1):
         if args.split == "ave":
             target_root = split_root / "official_ave" / target_id
@@ -302,6 +308,27 @@ def main() -> None:
             if not np.array_equal(result.parent_ids.astype(str), expected_ids):
                 raise RuntimeError(f"{target_id}: ranked library differs from split data")
             metrics = screening_metrics(labels, result.scores)
+            order = np.argsort(-result.scores, kind="stable")
+            pd.DataFrame(
+                {
+                    "target_id": target_id,
+                    "seed": args.seed,
+                    "K": episode["K"],
+                    "id": result.parent_ids[order].astype(str),
+                    "tactivs_score": result.scores[order],
+                    "rank": np.arange(1, len(order) + 1),
+                    "label": labels[order],
+                    "similarity": result.similarity[order],
+                    "direct": result.direct[order],
+                    "graph": result.graph[order],
+                }
+            ).to_csv(
+                scores_path,
+                mode="w" if score_count == 0 else "a",
+                header=score_count == 0,
+                index=False,
+            )
+            score_count += len(order)
             output_row = {
                 "benchmark": args.benchmark,
                 "split": args.split,
@@ -329,18 +356,17 @@ def main() -> None:
                 flush=True,
             )
 
-    args.output_dir.mkdir(parents=True, exist_ok=True)
     frame = pd.DataFrame(output_rows)
-    frame.to_csv(args.output_dir / "episodes.csv", index=False)
-    by_k, best = summarize(frame, args.output_dir)
-    print("\nTarget-macro summary by K")
-    display = by_k[["K", *[f"{metric}_mean" for metric in METRICS]]].rename(
+    summary = summarize(frame, args.output_dir)
+    print("\nTarget-macro summary")
+    display = summary[["K", *[f"{metric}_mean" for metric in METRICS]]].rename(
         columns={f"{metric}_mean": metric for metric in METRICS}
     )
     print(display.to_string(index=False))
-    print("\nBest K by target-macro BEDROC with alpha 80.5")
-    print(display[display["K"].isin(best["K"])].to_string(index=False))
-    print(f"\nWrote {len(frame)} episodes to {args.output_dir}")
+    print(
+        f"\nWrote {len(frame)} targets and {score_count} molecule scores "
+        f"to {args.output_dir}"
+    )
 
 
 if __name__ == "__main__":

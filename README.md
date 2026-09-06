@@ -98,14 +98,14 @@ tactivs-benchmark \
   --benchmark truedecoy \
   --split series-disjoint \
   --seed 0 \
+  --k 5 \
   --theta final.json \
   --output-dir runs/truedecoy-series-seed0
 ```
 
 TrueDecoy and RandomDecoy support `molecule-random` and `series-disjoint`.
-LIT-PCBA supports `molecule-random` and `ave`. The command writes
-`episodes.csv`, `summary_by_k.csv`, and `summary_best.csv`. The best K is selected
-by target-macro BEDROC with alpha 80.5.
+LIT-PCBA supports `molecule-random` and `ave`. `--k` is required and `--seed`
+defaults to 0. The command writes `summary.csv` and `scores.csv`.
 
 The benchmark data layout is:
 
