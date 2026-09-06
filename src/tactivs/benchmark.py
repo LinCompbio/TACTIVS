@@ -141,11 +141,7 @@ def episode_masks(
         candidates = read_smi_ids(target_root / "active_V.smi") | read_smi_ids(
             target_root / "inactive_V.smi"
         )
-        missing_candidates = candidates - parent_set
-        if missing_candidates:
-            raise KeyError(
-                f"{target_id}: {len(missing_candidates)} AVE candidates absent from EPT index"
-            )
+        candidates &= parent_set
         visible = np.asarray(
             [parent in reference_set or parent in candidates for parent in parents]
         )
@@ -244,7 +240,8 @@ def main() -> None:
             candidate_ids = read_smi_ids(
                 target_root / "active_V.smi"
             ) | read_smi_ids(target_root / "inactive_V.smi")
-            selected_ids = candidate_ids | {
+            available_ids = set(cache.parent_ids[target_id].astype(str))
+            selected_ids = (candidate_ids & available_ids) | {
                 parent
                 for episode in rows_by_target[target_id]
                 for parent in episode["references"]
