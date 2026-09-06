@@ -149,25 +149,17 @@ def episode_masks(
     return visible, ranked
 
 
-def summarize(episodes: pd.DataFrame, output_dir: Path) -> tuple[pd.DataFrame, dict]:
+def summarize(
+    episodes: pd.DataFrame, output_dir: Path
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     by_k = episodes.groupby("K")[list(METRICS)].agg(["mean", "std", "count"])
     by_k.columns = [f"{metric}_{stat}" for metric, stat in by_k.columns]
     by_k = by_k.reset_index()
     by_k.to_csv(output_dir / "summary_by_k.csv", index=False)
 
-    target_means = episodes.groupby("target_id")[list(METRICS)].mean()
-    overall = {
-        metric: {
-            "mean": float(target_means[metric].mean()),
-            "std": float(target_means[metric].std(ddof=1)),
-            "targets": int(target_means[metric].count()),
-        }
-        for metric in METRICS
-    }
-    pd.DataFrame(
-        [{"metric": metric, **values} for metric, values in overall.items()]
-    ).to_csv(output_dir / "summary_overall.csv", index=False)
-    return by_k, overall
+    best = by_k.nlargest(1, "ef_0.5%_mean")
+    best.to_csv(output_dir / "summary_best.csv", index=False)
+    return by_k, best
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -340,18 +332,14 @@ def main() -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     frame = pd.DataFrame(output_rows)
     frame.to_csv(args.output_dir / "episodes.csv", index=False)
-    by_k, overall = summarize(frame, args.output_dir)
+    by_k, best = summarize(frame, args.output_dir)
     print("\nTarget-macro summary by K")
     display = by_k[["K", *[f"{metric}_mean" for metric in METRICS]]].rename(
         columns={f"{metric}_mean": metric for metric in METRICS}
     )
     print(display.to_string(index=False))
-    print("\nOverall target-macro summary")
-    for metric, values in overall.items():
-        print(
-            f"{metric}: mean={values['mean']:.6g} "
-            f"std={values['std']:.6g} targets={values['targets']}"
-        )
+    print("\nBest K by target-macro EF@0.5%")
+    print(display[display["K"].isin(best["K"])].to_string(index=False))
     print(f"\nWrote {len(frame)} episodes to {args.output_dir}")
 
 

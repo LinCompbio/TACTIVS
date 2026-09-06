@@ -104,7 +104,8 @@ tactivs-benchmark \
 
 TrueDecoy and RandomDecoy support `molecule-random` and `series-disjoint`.
 LIT-PCBA supports `molecule-random` and `ave`. The command writes
-`episodes.csv`, `summary_by_k.csv`, and `summary_overall.csv`.
+`episodes.csv`, `summary_by_k.csv`, and `summary_best.csv`. The best K is selected
+by target-macro EF@0.5%.
 
 The benchmark data layout is:
 
