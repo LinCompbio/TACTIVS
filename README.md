@@ -9,6 +9,7 @@ covariance whitening, direct reference similarity, and graph propagation.
 ```bash
 conda env create -f environment.yml
 conda activate tactivs
+export PYTHONPATH="$PWD/src"
 ```
 
 The minimal EPT inference code is included in `src/tactivs/_vendor/ept`.
@@ -34,7 +35,7 @@ as `parent_molecule_id`.
 First encode the candidate library:
 
 ```bash
-tactivs-build-cache \
+python -c "from tactivs.cli import build_cache_main; build_cache_main()" \
   --molecules candidates.csv \
   --output cache/my_target \
   --target MY_TARGET \
@@ -46,7 +47,7 @@ For a library with more molecules than the EPT embedding dimension, fit a
 library-specific covariance whitener from the cache:
 
 ```bash
-tactivs-fit-whitener \
+python -c "from tactivs.cli import fit_whitener_main; fit_whitener_main()" \
   --cache cache/my_target \
   --output cache/my_target_whitener.npz
 ```
@@ -59,7 +60,7 @@ references. For smaller libraries, use the released PDBscreen whitener.
 Encode the known actives as the reference pool:
 
 ```bash
-tactivs-build-reference-pool \
+python -c "from tactivs.cli import build_reference_pool_main; build_reference_pool_main()" \
   --molecules known_actives.csv \
   --output cache/my_target_references.npz \
   --encoder-checkpoint /path/to/EPT.ckpt \
@@ -69,7 +70,7 @@ tactivs-build-reference-pool \
 Run inference:
 
 ```bash
-tactivs-infer \
+python -c "from tactivs.cli import infer_main; infer_main()" \
   --cache cache/my_target \
   --whitener cache/my_target_whitener.npz \
   --target MY_TARGET \
@@ -93,7 +94,7 @@ inference path used above. Labels are read again only after ranking to calculate
 metrics.
 
 ```bash
-tactivs-benchmark \
+python -m tactivs.benchmark \
   --data-root /path/to/tactivs_data \
   --benchmark truedecoy \
   --split series-disjoint \
@@ -121,7 +122,3 @@ tactivs_data/
   randomdecoy/
   litpcba/
 ```
-
-## License
-
-See [LICENSE](LICENSE).
