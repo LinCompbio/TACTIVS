@@ -1,11 +1,19 @@
-__pycache__/
+# Local Python caches
+**/__pycache__/
 *.py[cod]
-.pytest_cache/
-.ruff_cache/
-.venv/
-build/
-dist/
+/.pytest_cache/
+/.ruff_cache/
+/.mypy_cache/
+/.coverage
+/htmlcov/
+
+# Local environments and generated package metadata
+/.venv/
+/build/
+/dist/
 *.egg-info/
-weights/
+
+# Local model artifacts and experiment outputs
+/weights/
 *.ckpt
-runs/
+/runs/
