@@ -1,8 +1,17 @@
 # TACTIVS
 
-TACTIVS ranks a molecular library from a small pool of known active molecules.
-It uses frozen multi-conformer EPT embeddings, target-local centering,
-covariance whitening, direct reference similarity, and graph propagation.
+## Overview
+
+**TACTIVS** is a ligand-based transductive inference framework that conditions
+a frozen molecular representation directly at test time for flexible,
+target-specific virtual screening. Starting from a small pool of known active
+molecules, TACTIVS combines target-local centering, covariance whitening,
+direct reference similarity, and graph propagation to rank an unlabeled
+molecular library without target-specific model training.
+
+<div align="center">
+<img src="figures/fig1.jpeg" width="90%" alt="TACTIVS framework overview" />
+</div>
 
 ## Installation
 
@@ -11,10 +20,8 @@ conda env create -f environment.yml
 conda activate tactivs
 ```
 
-The minimal EPT inference code is included in `src/tactivs/_vendor/ept`.
-We thank Rui Jiao, Xiangzhe Kong, Li Zhang, Ziyang Yu, Fangyuan Ren, Wenjuan
-Tan, Wenbing Huang, and Yang Liu for developing EPT. Download the published
-epoch-49 checkpoint separately and pass it with `--encoder-checkpoint`.
+Download the published EPT epoch-49 checkpoint separately and pass it with
+`--encoder-checkpoint`.
 
 ## Input Format
 
@@ -121,3 +128,12 @@ tactivs_data/
   randomdecoy/
   litpcba/
 ```
+
+## Acknowledgements
+
+TACTIVS is built on the [Equivariant Pretrained Transformer
+(EPT)](https://doi.org/10.1038/s41467-026-69185-7). We thank Rui Jiao,
+Xiangzhe Kong, Li Zhang, Ziyang Yu, Fangyuan Ren, Wenjuan Tan, Wenbing Huang,
+and Yang Liu for developing EPT. The minimal EPT inference components required
+by TACTIVS are included in `src/tactivs/_vendor/ept` under the original
+upstream license.
