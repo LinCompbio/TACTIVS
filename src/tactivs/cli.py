@@ -9,6 +9,7 @@ import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+import numpy as np
 import torch
 
 from .cache import EmbeddingCache, load_projection
@@ -94,17 +95,18 @@ def infer_main(argv: Sequence[str] | None = None) -> None:
     result = score_library(target, references, params)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
+    order = np.argsort(-result.scores, kind="stable")
     with args.output.open("w", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(
             ["parent_molecule_id", "score", "similarity", "direct", "graph"]
         )
         for row in zip(
-            result.parent_ids,
-            result.scores,
-            result.similarity,
-            result.direct,
-            result.graph,
+            result.parent_ids[order],
+            result.scores[order],
+            result.similarity[order],
+            result.direct[order],
+            result.graph[order],
         ):
             writer.writerow(row)
     print(

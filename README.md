@@ -20,8 +20,9 @@ conda env create -f environment.yml
 conda activate tactivs
 ```
 
-Download the published EPT epoch-49 checkpoint separately and pass it with
-`--encoder-checkpoint`.
+Download the published EPT epoch-49 checkpoint from the
+[EPT pretrained checkpoint folder](https://drive.google.com/drive/folders/1ISCsnXss6YueYUvAIiR4wpm3k0TGjb44)
+and pass it with `--encoder-checkpoint`.
 
 ## Input Format
 
