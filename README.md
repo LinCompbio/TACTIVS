@@ -35,7 +35,7 @@ as `parent_molecule_id`.
 First encode the candidate library:
 
 ```bash
-python -c "from tactivs.cli import build_cache_main; build_cache_main()" \
+python -m tactivs build-cache \
   --molecules candidates.csv \
   --output cache/my_target \
   --target MY_TARGET \
@@ -47,7 +47,7 @@ For a library with more molecules than the EPT embedding dimension, fit a
 library-specific covariance whitener from the cache:
 
 ```bash
-python -c "from tactivs.cli import fit_whitener_main; fit_whitener_main()" \
+python -m tactivs fit-whitener \
   --cache cache/my_target \
   --output cache/my_target_whitener.npz
 ```
@@ -60,7 +60,7 @@ references. For smaller libraries, use the released PDBscreen whitener.
 Encode the known actives as the reference pool:
 
 ```bash
-python -c "from tactivs.cli import build_reference_pool_main; build_reference_pool_main()" \
+python -m tactivs build-reference-pool \
   --molecules known_actives.csv \
   --output cache/my_target_references.npz \
   --encoder-checkpoint /path/to/EPT.ckpt \
@@ -70,7 +70,7 @@ python -c "from tactivs.cli import build_reference_pool_main; build_reference_po
 Run inference:
 
 ```bash
-python -c "from tactivs.cli import infer_main; infer_main()" \
+python -m tactivs infer \
   --cache cache/my_target \
   --whitener cache/my_target_whitener.npz \
   --target MY_TARGET \
@@ -94,7 +94,7 @@ inference path used above. Labels are read again only after ranking to calculate
 metrics.
 
 ```bash
-python -m tactivs.benchmark \
+python -m tactivs benchmark \
   --data-root /path/to/tactivs_data \
   --benchmark truedecoy \
   --split series-disjoint \

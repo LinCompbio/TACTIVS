@@ -6,6 +6,7 @@ import argparse
 import csv
 import json
 from collections import defaultdict
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
@@ -36,6 +37,8 @@ METRICS = (
     "bayes_ef_1%",
     "bayes_ef_5%",
 )
+
+
 def read_episode_rows(path: Path, seed: int, ks: set[int]) -> list[dict]:
     rows = []
     with path.open(newline="") as handle:
@@ -70,9 +73,7 @@ def read_episode_rows(path: Path, seed: int, ks: set[int]) -> list[dict]:
                     "expected_candidate_count": int(row["candidate_count"]),
                     "expected_positive_count": int(row["positive_count"]),
                     "expected_negative_count": int(row["negative_count"]),
-                    "expected_excluded_count": int(
-                        row.get("series_excluded_count", 0)
-                    ),
+                    "expected_excluded_count": int(row.get("series_excluded_count", 0)),
                 }
             )
     if not rows:
@@ -99,7 +100,9 @@ def read_smi_ids(path: Path) -> set[str]:
         for line_number, line in enumerate(handle, 1):
             fields = line.split()
             if len(fields) < 2:
-                raise ValueError(f"{path}:{line_number}: expected SMILES and molecule ID")
+                raise ValueError(
+                    f"{path}:{line_number}: expected SMILES and molecule ID"
+                )
             ids.add(fields[-1])
     return ids
 
@@ -117,7 +120,9 @@ def episode_masks(
     reference_set = set(references)
     missing = reference_set - parent_set
     if missing:
-        raise KeyError(f"{target_id}: references absent from EPT index: {sorted(missing)}")
+        raise KeyError(
+            f"{target_id}: references absent from EPT index: {sorted(missing)}"
+        )
     reference_mask = np.asarray([parent in reference_set for parent in parents])
 
     if split == "molecule-random":
@@ -151,7 +156,8 @@ def episode_masks(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Evaluate one published TACTIVS benchmark reference protocol."
+        prog="python -m tactivs benchmark",
+        description="Evaluate one published TACTIVS benchmark reference protocol.",
     )
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--benchmark", choices=sorted(BENCHMARK_SPLITS), required=True)
@@ -171,9 +177,9 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> None:
+def main(argv: Sequence[str] | None = None) -> None:
     parser = build_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     allowed = BENCHMARK_SPLITS[args.benchmark]
     if args.split not in allowed:
         parser.error(
@@ -182,7 +188,9 @@ def main() -> None:
     if args.k < 1 or args.k > 10:
         parser.error("--k must be between 1 and 10")
     dataset_root = args.data_root / args.benchmark
-    split_folder = "random" if args.split == "molecule-random" else args.split.replace("-", "_")
+    split_folder = (
+        "random" if args.split == "molecule-random" else args.split.replace("-", "_")
+    )
     split_root = dataset_root / "splits" / split_folder
     episode_file = split_root / "episodes.csv"
     episodes = read_episode_rows(episode_file, args.seed, {args.k})
@@ -218,9 +226,9 @@ def main() -> None:
     for target_index, target_id in enumerate(sorted(rows_by_target), 1):
         if args.split == "ave":
             target_root = split_root / "official_ave" / target_id
-            candidate_ids = read_smi_ids(
-                target_root / "active_V.smi"
-            ) | read_smi_ids(target_root / "inactive_V.smi")
+            candidate_ids = read_smi_ids(target_root / "active_V.smi") | read_smi_ids(
+                target_root / "inactive_V.smi"
+            )
             available_ids = set(cache.parent_ids[target_id].astype(str))
             selected_ids = (candidate_ids & available_ids) | {
                 parent
@@ -280,16 +288,14 @@ def main() -> None:
                     f"{target_id}, K={episode['K']}: metrics require both classes"
                 )
             episode_target = target if visible.all() else subset_target(target, visible)
-            pool = ReferencePool.from_cached_ids(
-                references, source="benchmark_actives"
-            )
-            episode_target, references = pool.materialize(
-                episode_target, projection
-            )
+            pool = ReferencePool.from_cached_ids(references, source="benchmark_actives")
+            episode_target, references = pool.materialize(episode_target, projection)
             result = score_library(episode_target, references, params)
             expected_ids = target.parent_ids[ranked].astype(str)
             if not np.array_equal(result.parent_ids.astype(str), expected_ids):
-                raise RuntimeError(f"{target_id}: ranked library differs from split data")
+                raise RuntimeError(
+                    f"{target_id}: ranked library differs from split data"
+                )
             metrics = screening_metrics(labels, result.scores)
             order = np.argsort(-result.scores, kind="stable")
             output_dir = args.output_dir / target_id / f"seed_{args.seed}"
@@ -322,9 +328,7 @@ def main() -> None:
                 **metrics,
             }
             pd.DataFrame([output_row]).to_csv(output_dir / "summary.csv", index=False)
-            metric_text = " ".join(
-                f"{name}={metrics[name]:.6g}" for name in METRICS
-            )
+            metric_text = " ".join(f"{name}={metrics[name]:.6g}" for name in METRICS)
             print(
                 f"[{target_index}/{len(rows_by_target)}] target={target_id} "
                 f"seed={args.seed} K={episode['K']} references={references} "

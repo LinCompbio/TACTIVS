@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import sys
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import torch
@@ -22,9 +24,10 @@ from .reference_pool import (
 from .whitening import fit_whitener
 
 
-def infer_main() -> None:
+def infer_main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
-        description="Rank one unlabeled molecular library from K positive references."
+        prog="python -m tactivs infer",
+        description="Rank one unlabeled molecular library from K positive references.",
     )
     parser.add_argument("--cache", type=Path, required=True)
     parser.add_argument("--whitener", type=Path, required=True)
@@ -50,8 +53,10 @@ def infer_main() -> None:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--theta", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    args = parser.parse_args()
+    parser.add_argument(
+        "--device", default="cuda" if torch.cuda.is_available() else "cpu"
+    )
+    args = parser.parse_args(argv)
 
     configure_determinism()
     device = torch.device(args.device)
@@ -91,7 +96,9 @@ def infer_main() -> None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("w", newline="") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["parent_molecule_id", "score", "similarity", "direct", "graph"])
+        writer.writerow(
+            ["parent_molecule_id", "score", "similarity", "direct", "graph"]
+        )
         for row in zip(
             result.parent_ids,
             result.scores,
@@ -115,16 +122,17 @@ def infer_main() -> None:
     )
 
 
-def build_reference_pool_main() -> None:
+def build_reference_pool_main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
-        description="Generate, encode, and cache an external TACTIVS reference pool."
+        prog="python -m tactivs build-reference-pool",
+        description="Generate, encode, and cache an external TACTIVS reference pool.",
     )
     parser.add_argument("--molecules", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--conformers", type=int, default=10)
     parser.add_argument("--seed", type=int, default=0)
     _add_ept_arguments(parser)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     configure_determinism(args.seed)
     device = torch.device(args.device)
@@ -150,9 +158,10 @@ def build_reference_pool_main() -> None:
     )
 
 
-def build_cache_main() -> None:
+def build_cache_main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
-        description="Generate a TACTIVS EPT cache for a molecular library."
+        prog="python -m tactivs build-cache",
+        description="Generate a TACTIVS EPT cache for a molecular library.",
     )
     parser.add_argument("--molecules", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -161,7 +170,7 @@ def build_cache_main() -> None:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--molecule-batch-size", type=int, default=256)
     _add_ept_arguments(parser)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     configure_determinism(args.seed)
     device = torch.device(args.device)
@@ -179,16 +188,17 @@ def build_cache_main() -> None:
     print(json.dumps({"cache": str(args.output), **info}, indent=2))
 
 
-def fit_whitener_main() -> None:
+def fit_whitener_main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
-        description="Fit a covariance-only whitener from an EPT cache."
+        prog="python -m tactivs fit-whitener",
+        description="Fit a covariance-only whitener from an EPT cache.",
     )
     parser.add_argument("--cache", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--shrinkage", type=float, default=0.01)
     parser.add_argument("--eps", type=float, default=1e-5)
     parser.add_argument("--molecule-batch-size", type=int, default=4096)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     info = fit_whitener(
         args.cache,
@@ -203,7 +213,9 @@ def fit_whitener_main() -> None:
 def _add_ept_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--encoder-checkpoint", type=Path, required=True)
     parser.add_argument("--batch-size", type=int, default=128)
-    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument(
+        "--device", default="cuda" if torch.cuda.is_available() else "cpu"
+    )
 
 
 def _load_ept_encoder(args, device: torch.device) -> EPTConformerEncoder:
@@ -212,3 +224,57 @@ def _load_ept_encoder(args, device: torch.device) -> EPTConformerEncoder:
         device,
         batch_size=args.batch_size,
     )
+
+
+def _benchmark_main(argv: Sequence[str] | None = None) -> None:
+    from .benchmark import main as benchmark_main
+
+    benchmark_main(argv)
+
+
+COMMANDS: dict[str, tuple[str, Callable[[Sequence[str] | None], None]]] = {
+    "infer": (
+        "rank a molecular library from known active references",
+        infer_main,
+    ),
+    "build-cache": (
+        "encode a molecular library into an EPT cache",
+        build_cache_main,
+    ),
+    "build-reference-pool": (
+        "encode known active molecules into a reference pool",
+        build_reference_pool_main,
+    ),
+    "fit-whitener": (
+        "fit a covariance-only whitening projection",
+        fit_whitener_main,
+    ),
+    "benchmark": (
+        "reproduce a published benchmark episode",
+        _benchmark_main,
+    ),
+}
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    """Dispatch the source-only command-line interface."""
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    parser = argparse.ArgumentParser(
+        prog="python -m tactivs",
+        description="TACTIVS molecular-library ranking tools.",
+        epilog="\n".join(
+            f"  {name:<22} {description}" for name, (description, _) in COMMANDS.items()
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "command",
+        choices=COMMANDS,
+        help="command to run",
+    )
+    if not arguments or arguments[0] in {"-h", "--help"}:
+        parser.print_help()
+        return
+
+    command = parser.parse_args(arguments[:1]).command
+    COMMANDS[command][1](arguments[1:])
