@@ -110,16 +110,16 @@ python tactivs.py benchmark \
   --benchmark truedecoy \
   --split series-disjoint \
   --seed 0 \
-  --k 5 \
+  --k 1 2 3 4 5 6 7 8 9 10 \
   --theta final.json \
-  --output-dir runs/truedecoy-series-k5
+  --output-dir runs/truedecoy-series
 ```
 
 TrueDecoy and RandomDecoy support `molecule-random` and `series-disjoint`.
-LIT-PCBA supports `molecule-random` and `ave`. `--k` is required and `--seed`
-defaults to 0. Each target is written to
+LIT-PCBA supports `molecule-random` and `ave`. `--k` accepts one or more unique
+values from 1 through 10 and `--seed` defaults to 0. Each target is written to
 `<output-dir>/<target_id>/seed_<seed>/`, containing `summary.csv` and
-`scores.csv`.
+`scores.csv`. Both files include a `K` column.
 
 The benchmark data layout is:
 

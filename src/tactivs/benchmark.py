@@ -167,7 +167,7 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
     )
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--k", type=int, required=True)
+    parser.add_argument("--k", type=int, nargs="+", required=True)
     parser.add_argument("--target", action="append", dest="targets")
     parser.add_argument("--theta", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -185,15 +185,17 @@ def main(argv: Sequence[str] | None = None) -> None:
         parser.error(
             f"{args.benchmark} supports {', '.join(sorted(allowed))}, not {args.split}"
         )
-    if args.k < 1 or args.k > 10:
-        parser.error("--k must be between 1 and 10")
+    if any(k < 1 or k > 10 for k in args.k):
+        parser.error("--k values must be between 1 and 10")
+    if len(args.k) != len(set(args.k)):
+        parser.error("--k values must be unique")
     dataset_root = args.data_root / args.benchmark
     split_folder = (
         "random" if args.split == "molecule-random" else args.split.replace("-", "_")
     )
     split_root = dataset_root / "splits" / split_folder
     episode_file = split_root / "episodes.csv"
-    episodes = read_episode_rows(episode_file, args.seed, {args.k})
+    episodes = read_episode_rows(episode_file, args.seed, set(args.k))
     requested_targets = set(args.targets or [])
     available_targets = {row["target_id"] for row in episodes}
     unknown = requested_targets - available_targets
@@ -201,9 +203,9 @@ def main(argv: Sequence[str] | None = None) -> None:
         parser.error(f"targets unavailable for this split/seed: {sorted(unknown)}")
     if requested_targets:
         episodes = [row for row in episodes if row["target_id"] in requested_targets]
-    output_dirs = [
+    output_dirs = {
         args.output_dir / row["target_id"] / f"seed_{args.seed}" for row in episodes
-    ]
+    }
     occupied = [path for path in output_dirs if path.exists() and any(path.iterdir())]
     if occupied:
         parser.error(f"result directory must be empty: {occupied[0]}")
@@ -225,6 +227,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     score_count = 0
     output_rows = []
     for target_index, target_id in enumerate(sorted(rows_by_target), 1):
+        target_summary_rows = []
+        target_score_frames = []
         if args.split == "ave":
             target_root = split_root / "official_ave" / target_id
             candidate_ids = read_smi_ids(target_root / "active_V.smi") | read_smi_ids(
@@ -300,18 +304,20 @@ def main(argv: Sequence[str] | None = None) -> None:
             metrics = screening_metrics(labels, result.scores)
             order = np.argsort(-result.scores, kind="stable")
             output_dir = args.output_dir / target_id / f"seed_{args.seed}"
-            output_dir.mkdir(parents=True, exist_ok=True)
-            pd.DataFrame(
-                {
-                    "id": result.parent_ids[order].astype(str),
-                    "tactivs_score": result.scores[order],
-                    "rank": np.arange(1, len(order) + 1),
-                    "label": labels[order],
-                    "similarity": result.similarity[order],
-                    "direct": result.direct[order],
-                    "graph": result.graph[order],
-                }
-            ).to_csv(output_dir / "scores.csv", index=False)
+            target_score_frames.append(
+                pd.DataFrame(
+                    {
+                        "K": episode["K"],
+                        "id": result.parent_ids[order].astype(str),
+                        "tactivs_score": result.scores[order],
+                        "rank": np.arange(1, len(order) + 1),
+                        "label": labels[order],
+                        "similarity": result.similarity[order],
+                        "direct": result.direct[order],
+                        "graph": result.graph[order],
+                    }
+                )
+            )
             score_count += len(order)
             output_row = {
                 "benchmark": args.benchmark,
@@ -329,7 +335,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 **metrics,
             }
             output_rows.append(output_row)
-            pd.DataFrame([output_row]).to_csv(output_dir / "summary.csv", index=False)
+            target_summary_rows.append(output_row)
             metric_text = " ".join(f"{name}={metrics[name]:.6g}" for name in METRICS)
             print(
                 f"[{target_index}/{len(rows_by_target)}] target={target_id} "
@@ -339,19 +345,25 @@ def main(argv: Sequence[str] | None = None) -> None:
                 flush=True,
             )
 
+        output_dir.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(target_summary_rows).to_csv(
+            output_dir / "summary.csv", index=False
+        )
+        pd.concat(target_score_frames, ignore_index=True).to_csv(
+            output_dir / "scores.csv", index=False
+        )
+
     frame = pd.DataFrame(output_rows)
-    summary = pd.DataFrame(
-        {
-            "metric": METRICS,
-            "mean": [frame[metric].mean() for metric in METRICS],
-            "std": [frame[metric].std(ddof=1) for metric in METRICS],
-        }
-    )
-    print(
-        f"\nTarget-macro summary (seed={args.seed}, K={args.k}, "
-        f"targets={len(frame)})"
-    )
-    print(summary.to_string(index=False))
+    for k, rows in frame.groupby("K", sort=True):
+        summary = pd.DataFrame(
+            {
+                "metric": METRICS,
+                "mean": [rows[metric].mean() for metric in METRICS],
+                "std": [rows[metric].std(ddof=1) for metric in METRICS],
+            }
+        )
+        print(f"\nTarget-macro summary (seed={args.seed}, K={k}, targets={len(rows)})")
+        print(summary.to_string(index=False))
     print(
         f"\nWrote {len(rows_by_target)} targets and {score_count} molecule scores "
         f"to {args.output_dir}"
