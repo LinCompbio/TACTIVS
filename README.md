@@ -20,6 +20,10 @@ conda env create -f environment.yml
 conda activate tactivs
 ```
 
+The environment uses PyTorch 2.7.1 with CUDA 12.8. This build supports NVIDIA
+GPU architectures from `sm_75` through `sm_120`, including RTX 20, 30, 40, and
+50 series GPUs. A recent NVIDIA driver with CUDA 12.8 support is required.
+
 Download the published EPT epoch-49 checkpoint from the
 [EPT pretrained checkpoint folder](https://drive.google.com/drive/folders/1ISCsnXss6YueYUvAIiR4wpm3k0TGjb44)
 and pass it with `--encoder-checkpoint`.
