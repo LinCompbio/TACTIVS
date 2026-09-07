@@ -26,7 +26,7 @@ from .whitening import fit_whitener
 
 def infer_main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
-        prog="python -m tactivs infer",
+        prog="python tactivs.py infer",
         description="Rank one unlabeled molecular library from K positive references.",
     )
     parser.add_argument("--cache", type=Path, required=True)
@@ -124,7 +124,7 @@ def infer_main(argv: Sequence[str] | None = None) -> None:
 
 def build_reference_pool_main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
-        prog="python -m tactivs build-reference-pool",
+        prog="python tactivs.py build-reference-pool",
         description="Generate, encode, and cache an external TACTIVS reference pool.",
     )
     parser.add_argument("--molecules", type=Path, required=True)
@@ -160,7 +160,7 @@ def build_reference_pool_main(argv: Sequence[str] | None = None) -> None:
 
 def build_cache_main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
-        prog="python -m tactivs build-cache",
+        prog="python tactivs.py build-cache",
         description="Generate a TACTIVS EPT cache for a molecular library.",
     )
     parser.add_argument("--molecules", type=Path, required=True)
@@ -190,7 +190,7 @@ def build_cache_main(argv: Sequence[str] | None = None) -> None:
 
 def fit_whitener_main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
-        prog="python -m tactivs fit-whitener",
+        prog="python tactivs.py fit-whitener",
         description="Fit a covariance-only whitener from an EPT cache.",
     )
     parser.add_argument("--cache", type=Path, required=True)
@@ -260,7 +260,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     """Dispatch the source-only command-line interface."""
     arguments = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(
-        prog="python -m tactivs",
+        prog="python tactivs.py",
         description="TACTIVS molecular-library ranking tools.",
         epilog="\n".join(
             f"  {name:<22} {description}" for name, (description, _) in COMMANDS.items()

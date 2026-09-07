@@ -156,7 +156,7 @@ def episode_masks(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="python -m tactivs benchmark",
+        prog="python tactivs.py benchmark",
         description="Evaluate one published TACTIVS benchmark reference protocol.",
     )
     parser.add_argument("--data-root", type=Path, required=True)
