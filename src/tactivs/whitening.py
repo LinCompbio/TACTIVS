@@ -75,12 +75,7 @@ def fit_whitener(
 
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(
-        output,
-        projection=projection.astype(np.float32),
-        shrinkage=np.asarray(shrinkage),
-        eps=np.asarray(eps),
-    )
+    np.savez_compressed(output, projection=projection.astype(np.float32))
     return {
         "targets": len(cache.target_ids),
         "molecules": molecule_count,
