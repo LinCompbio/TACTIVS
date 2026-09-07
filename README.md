@@ -118,8 +118,8 @@ python tactivs.py benchmark \
 TrueDecoy and RandomDecoy support `molecule-random` and `series-disjoint`.
 LIT-PCBA supports `molecule-random` and `ave`. `--k` accepts one or more unique
 values from 1 through 10 and `--seed` defaults to 0. Each target is written to
-`<output-dir>/<target_id>/seed_<seed>/`, containing `summary.csv` and
-`scores.csv`. Both files include a `K` column.
+`<output-dir>-<UTC timestamp>/<target_id>/seed_<seed>/`, containing
+`summary.csv` and `scores.csv`. Both files include a `K` column.
 
 The benchmark data layout is:
 

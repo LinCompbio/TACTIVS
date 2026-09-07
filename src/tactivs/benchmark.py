@@ -7,6 +7,7 @@ import csv
 import json
 from collections import defaultdict
 from collections.abc import Sequence
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -203,6 +204,10 @@ def main(argv: Sequence[str] | None = None) -> None:
         parser.error(f"targets unavailable for this split/seed: {sorted(unknown)}")
     if requested_targets:
         episodes = [row for row in episodes if row["target_id"] in requested_targets]
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%fZ")
+    args.output_dir = args.output_dir.with_name(
+        f"{args.output_dir.name}-{timestamp}"
+    )
     output_dirs = {
         args.output_dir / row["target_id"] / f"seed_{args.seed}" for row in episodes
     }
