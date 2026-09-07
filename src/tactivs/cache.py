@@ -35,10 +35,8 @@ def load_projection(path: Path, device: torch.device) -> torch.Tensor:
     return torch.as_tensor(projection, device=device)
 
 
-def molecule_balanced_mean(
-    raw: torch.Tensor, parent_counts: np.ndarray
-) -> torch.Tensor:
-    """Return the mean after assigning equal weight to every molecule."""
+def molecule_means(raw: torch.Tensor, parent_counts: np.ndarray) -> torch.Tensor:
+    """Average conformer embeddings independently for each parent molecule."""
     counts = torch.as_tensor(parent_counts, dtype=raw.dtype, device=raw.device)
     codes = torch.repeat_interleave(
         torch.arange(len(parent_counts), dtype=torch.int64, device=raw.device),
@@ -49,7 +47,14 @@ def molecule_balanced_mean(
     )
     centers.index_add_(0, codes, raw)
     centers /= counts[:, None]
-    return centers.mean(0)
+    return centers
+
+
+def molecule_balanced_mean(
+    raw: torch.Tensor, parent_counts: np.ndarray
+) -> torch.Tensor:
+    """Return the mean after assigning equal weight to every molecule."""
+    return molecule_means(raw, parent_counts).mean(0)
 
 
 def external_whiten(
@@ -177,9 +182,7 @@ class EmbeddingCache:
         meta = self.meta[target_id]
         counts = meta["parent_counts"].copy()
         raw = self.store.load_ranges(meta["parent_starts"], counts, device)
-        parent_starts = np.concatenate(([0], np.cumsum(counts[:-1]))).astype(
-            np.int64
-        )
+        parent_starts = np.concatenate(([0], np.cumsum(counts[:-1]))).astype(np.int64)
         embeddings = (
             external_whiten(raw, projection, counts)
             if projection is not None

@@ -32,6 +32,7 @@ ept = [
   "torch-scatter>=2.1",
   "tqdm>=4.60",
 ]
+test = ["pytest>=8.0"]
 
 [tool.setuptools]
 include-package-data = true
@@ -41,3 +42,6 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "tactivs._vendor.ept" = ["LICENSE"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from .cache import EmbeddingCache
+from .cache import EmbeddingCache, molecule_means
 
 
 def fit_whitener(
@@ -53,7 +53,7 @@ def fit_whitener(
                 batch_counts,
                 torch.device("cpu"),
             )
-            centers = _molecule_means(raw, batch_counts).to(torch.float64)
+            centers = molecule_means(raw, batch_counts).to(torch.float64)
             total += centers.sum(0)
             second_moment += centers.T @ centers
 
@@ -66,9 +66,8 @@ def fit_whitener(
     average_variance = float(np.trace(covariance) / dimension)
     if average_variance <= 0.0:
         raise ValueError("cache embeddings have no variance")
-    covariance = (
-        (1.0 - shrinkage) * covariance
-        + shrinkage * average_variance * np.eye(dimension)
+    covariance = (1.0 - shrinkage) * covariance + shrinkage * average_variance * np.eye(
+        dimension
     )
     eigenvalues, eigenvectors = np.linalg.eigh(covariance)
     inverse_scales = 1.0 / np.sqrt(np.maximum(eigenvalues, 0.0) + eps)
@@ -87,13 +86,3 @@ def fit_whitener(
         "molecules": molecule_count,
         "dimension": dimension,
     }
-
-
-def _molecule_means(raw: torch.Tensor, counts: np.ndarray) -> torch.Tensor:
-    count_tensor = torch.as_tensor(counts, dtype=raw.dtype)
-    codes = torch.repeat_interleave(
-        torch.arange(len(counts), dtype=torch.int64), count_tensor.to(torch.int64)
-    )
-    centers = torch.zeros((len(counts), raw.shape[1]), dtype=raw.dtype)
-    centers.index_add_(0, codes, raw)
-    return centers / count_tensor[:, None]

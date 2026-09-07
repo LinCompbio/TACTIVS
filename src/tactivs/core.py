@@ -8,7 +8,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from .cache import TargetData
+from .cache import TargetData, molecule_means
 
 
 @dataclass
@@ -26,22 +26,7 @@ def zscore(values: torch.Tensor) -> torch.Tensor:
 
 @torch.no_grad()
 def molecule_centers(target: TargetData) -> torch.Tensor:
-    counts = torch.as_tensor(
-        target.parent_counts,
-        dtype=target.embeddings.dtype,
-        device=target.embeddings.device,
-    )
-    codes = torch.repeat_interleave(
-        torch.arange(len(counts), dtype=torch.int64, device=counts.device),
-        counts.to(torch.int64),
-    )
-    centers = torch.zeros(
-        (len(counts), target.embeddings.shape[1]),
-        dtype=target.embeddings.dtype,
-        device=target.embeddings.device,
-    )
-    centers.index_add_(0, codes, target.embeddings)
-    return F.normalize(centers / counts[:, None], dim=1)
+    return F.normalize(molecule_means(target.embeddings, target.parent_counts), dim=1)
 
 
 @torch.no_grad()
@@ -112,9 +97,7 @@ def topk_mean_similarity(
     """Compute mean top-k similarities without materializing the full matrix."""
     if query_chunk < 1:
         raise ValueError("query_chunk must be positive")
-    output = torch.empty(
-        len(queries), dtype=queries.dtype, device=queries.device
-    )
+    output = torch.empty(len(queries), dtype=queries.dtype, device=queries.device)
     for begin in range(0, len(queries), query_chunk):
         end = min(begin + query_chunk, len(queries))
         similarity = queries[begin:end] @ references.T
@@ -189,9 +172,7 @@ def score_library(
         support_k,
         query_chunk,
     )
-    pose_score = float(params.get("similarity_weight", 1.0)) * zscore(
-        pose_similarity
-    )
+    pose_score = float(params.get("similarity_weight", 1.0)) * zscore(pose_similarity)
     molecule_score = zscore(
         pool_by_parent(pose_score, library_codes, query_mask, n_parents)
     )
