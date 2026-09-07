@@ -223,6 +223,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         rows_by_target[row["target_id"]].append(row)
 
     score_count = 0
+    output_rows = []
     for target_index, target_id in enumerate(sorted(rows_by_target), 1):
         if args.split == "ave":
             target_root = split_root / "official_ave" / target_id
@@ -327,6 +328,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "excluded_count": excluded,
                 **metrics,
             }
+            output_rows.append(output_row)
             pd.DataFrame([output_row]).to_csv(output_dir / "summary.csv", index=False)
             metric_text = " ".join(f"{name}={metrics[name]:.6g}" for name in METRICS)
             print(
@@ -337,6 +339,19 @@ def main(argv: Sequence[str] | None = None) -> None:
                 flush=True,
             )
 
+    frame = pd.DataFrame(output_rows)
+    summary = pd.DataFrame(
+        {
+            "metric": METRICS,
+            "mean": [frame[metric].mean() for metric in METRICS],
+            "std": [frame[metric].std(ddof=1) for metric in METRICS],
+        }
+    )
+    print(
+        f"\nTarget-macro summary (seed={args.seed}, K={args.k}, "
+        f"targets={len(frame)})"
+    )
+    print(summary.to_string(index=False))
     print(
         f"\nWrote {len(rows_by_target)} targets and {score_count} molecule scores "
         f"to {args.output_dir}"
