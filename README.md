@@ -98,6 +98,13 @@ and `graph`; no benchmark metrics are calculated in this path.
 
 ## Benchmark Reproduction
 
+Download [`tactivs_data.tar.zst`](https://drive.google.com/open?id=1AmjcaP54jM3MmtE_mTnlrzvC_hsQjajc)
+and extract it before running the benchmarks:
+
+```bash
+tar --zstd -xf tactivs_data.tar.zst
+```
+
 The released benchmark cache contains both active and inactive molecules with
 labels. For every episode, its selected active molecules form the reference
 pool, and all remaining molecules in the episode are ranked by the same
