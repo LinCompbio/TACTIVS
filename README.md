@@ -144,8 +144,6 @@ tactivs_data/
 ## Acknowledgements
 
 TACTIVS is built on the [Equivariant Pretrained Transformer
-(EPT)](https://doi.org/10.1038/s41467-026-69185-7). We thank Rui Jiao,
-Xiangzhe Kong, Li Zhang, Ziyang Yu, Fangyuan Ren, Wenjuan Tan, Wenbing Huang,
-and Yang Liu for developing EPT. The minimal EPT inference components required
-by TACTIVS are included in `src/tactivs/_vendor/ept` under the original
-upstream license.
+(EPT)](https://doi.org/10.1038/s41467-026-69185-7). We thank the EPT authors for
+their outstanding work. The minimal EPT inference components required by
+TACTIVS are included in `src/tactivs/_vendor/ept` under the original license.
