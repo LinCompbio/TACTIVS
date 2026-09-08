@@ -235,7 +235,9 @@ def generate_conformers(
         for conformer_id in range(heavy.GetNumConformers()):
             conformer = Chem.Mol(heavy)
             conformer.RemoveAllConformers()
-            conformer.AddConformer(Chem.Conformer(heavy.GetConformer(conformer_id)))
+            conformer.AddConformer(
+                Chem.Conformer(heavy.GetConformer(conformer_id)), assignId=True
+            )
             conformer.SetProp("_Name", f"{record.parent_id}#{conformer_id}")
             conformers.append(conformer)
         counts.append(heavy.GetNumConformers())
