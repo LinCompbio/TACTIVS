@@ -54,9 +54,8 @@ python tactivs.py build-cache \
   --conformers 10
 ```
 
-Inference defaults to the bundled `whitener.npz` (approximately 1 MB), a
+Inference defaults to the bundled `whitener.npz`, a
 512-dimensional PDBscreen covariance projection for the EPT epoch-49 encoder.
-No separate whitener download or fitting is required.
 
 For small screening libraries, we recommend this provided whitening projection
 alongside the target-local mean computed at inference. For sufficiently large
@@ -70,13 +69,6 @@ python tactivs.py fit-whitener \
   --cache cache/my_target \
   --output cache/my_target_whitener.npz
 ```
-
-EPT embeddings have 512 dimensions, so this command requires at least 513
-molecules. This is a computational minimum; a substantially larger, diverse
-library is preferable for estimating its covariance. The library mean is used
-to estimate the covariance but is not saved; inference recomputes the
-target-local mean after combining candidates and references. Fitting remains
-an explicit step: omit it to use the bundled PDBscreen whitener.
 
 Encode the known actives as the reference pool:
 
@@ -101,23 +93,6 @@ python tactivs.py infer \
 
 To use your own fitted projection, add
 `--whitener cache/my_target_whitener.npz` to the inference command.
-The bundled projection is the PDBscreen artifact used for DEKOIS2 development
-and TrueDecoy evaluation; it stores only the projection, without a fixed mean.
-
-Candidate and reference embeddings are combined before target-local centering,
-whitening, and graph construction. References supply both direct-similarity
-conformers and graph seeds; they participate in propagation and are excluded
-only from the ranked output. Benchmark episodes follow the same scoring path:
-their references are already in the cache, while external references are appended
-to the candidate cache in memory. Identical embeddings, projection, parameters,
-and molecule order therefore define the same scoring problem in both modes.
-`ranking.csv` contains `parent_molecule_id`, `score`, `similarity`, `direct`,
-and `graph`; no benchmark metrics are calculated in this path.
-
-Cache and reference-pool construction display progress bars for conformer
-generation and EPT encoding. Cache construction also shows overall batch progress.
-For benchmark reproduction, the evaluator uses each dataset's supplied whitener
-to preserve its benchmark-specific overlap exclusions.
 
 ## Benchmark Reproduction
 
