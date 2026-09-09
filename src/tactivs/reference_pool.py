@@ -13,6 +13,7 @@ import numpy as np
 import torch
 from rdkit import Chem
 from rdkit.Chem.rdDistGeom import ETKDGv3, EmbedMultipleConfs
+from tqdm.auto import tqdm
 
 from .cache import TargetData, external_whiten
 
@@ -221,7 +222,7 @@ def generate_conformers(
         raise ValueError("conformers_per_molecule must be positive")
     conformers = []
     counts = []
-    for record in records:
+    for record in tqdm(records, desc="Generating conformers", unit="molecule", leave=False):
         molecule = Chem.AddHs(Chem.MolFromSmiles(record.canonical_smiles))
         params = ETKDGv3()
         params.useRandomCoords = True
@@ -308,7 +309,12 @@ class EPTConformerEncoder:
     @torch.no_grad()
     def encode(self, conformers: list[Chem.Mol]) -> torch.Tensor:
         outputs = []
-        for begin in range(0, len(conformers), self.batch_size):
+        for begin in tqdm(
+            range(0, len(conformers), self.batch_size),
+            desc="Encoding conformers",
+            unit="batch",
+            leave=False,
+        ):
             examples = []
             for molecule in conformers[begin : begin + self.batch_size]:
                 blocks = self.rdkit_to_blocks(molecule, using_hydrogen=False)

@@ -31,7 +31,12 @@ def infer_main(argv: Sequence[str] | None = None) -> None:
         description="Rank one unlabeled molecular library from K positive references.",
     )
     parser.add_argument("--cache", type=Path, required=True)
-    parser.add_argument("--whitener", type=Path, required=True)
+    parser.add_argument(
+        "--whitener",
+        type=Path,
+        default=Path(__file__).resolve().parents[2] / "whitener.npz",
+        help="Covariance projection (default: bundled PDBscreen whitener).",
+    )
     parser.add_argument("--target", required=True)
     reference = parser.add_mutually_exclusive_group(required=True)
     reference.add_argument(

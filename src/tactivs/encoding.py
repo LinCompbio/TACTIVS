@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+from tqdm.auto import tqdm
 
 from .reference_pool import ConformerEncoder, MoleculeRecord, generate_conformers
 
@@ -32,7 +33,11 @@ def build_embedding_cache(
     counts = []
     row_count = 0
     shard_count = 0
-    for begin in range(0, len(records), molecule_batch_size):
+    for begin in tqdm(
+        range(0, len(records), molecule_batch_size),
+        desc="Building cache",
+        unit="batch",
+    ):
         batch = records[begin : begin + molecule_batch_size]
         conformers, batch_counts = generate_conformers(
             batch, conformers_per_molecule, seed
